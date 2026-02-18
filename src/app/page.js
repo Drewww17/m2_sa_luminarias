@@ -6,6 +6,13 @@ import {
   CheckCircle, ChevronRight, LogIn, PlusCircle, BookOpen, 
   Settings, LayoutDashboard, FileBarChart, Filter, ArrowRight 
 } from 'lucide-react';
+import jsPDF from "jspdf";
+import html2canvas from "html2canvas";
+import Webcam from "react-webcam";
+import { Pie } from "react-chartjs-2";
+import { Chart as ChartJS, ArcElement, Tooltip, Legend } from "chart.js";
+
+ChartJS.register(ArcElement, Tooltip, Legend);
 
 // --- NEW IMPORTS FROM YOUR IMAGE ---
 import { auth, db } from "@/lib/firebase";
@@ -26,7 +33,8 @@ import {
   serverTimestamp,
   setDoc,
   doc,
-  getDoc
+  getDoc,
+  updateDoc
 } from "firebase/firestore";
 
 // --- CONSTANT FROM YOUR IMAGE ---
@@ -160,9 +168,14 @@ export default function App() {
         result: resultData.is_ulcer ? 'Ulcer' : 'Healthy',
         diagnosis: resultData.diagnosis,
         confidence: resultData.confidence,
+        riskScore: resultData.riskScore,
+        severity: resultData.severity,
         status: resultData.is_ulcer ? 'red' : 'green',
         createdAt: serverTimestamp(),
-        dateString: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+        dateString: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+        verified: false,
+        verifiedBy: null,
+        verifiedAt: null
       });
       // Navigate after save
       navigate('my-history');
@@ -199,6 +212,7 @@ export default function App() {
               navigate={navigate} 
               result={analysisResult} 
               image={scanImage}
+              history={scanHistory}
               onSave={() => handleSaveScan(analysisResult)} 
             />
           )}
@@ -209,7 +223,7 @@ export default function App() {
           
           {/* DOCTOR PORTAL */}
           {route === 'doctor-dashboard' && <DoctorDashboard navigate={navigate} allScans={allScans} />}
-          {route === 'patient-records' && <PatientRecords navigate={navigate} allScans={allScans} />}
+          {route === 'patient-records' && <PatientRecords navigate={navigate} allScans={allScans} userData={userData} />}
           {route === 'patient-cumulative' && <PatientCumulative navigate={navigate} allScans={allScans} />}
           {route === 'test-model' && <TestModel navigate={navigate} />}
           {/* Doctor Review: Uses transient image if just scanned, or placeholder if from history */}
@@ -240,6 +254,7 @@ const Navbar = ({ route, userData, navigate, onLogout }) => {
     ],
     doctor: [
       { id: 'doctor-dashboard', label: 'Dashboard' },
+      { id: 'new-scan', label: 'Live Scan' },
       { id: 'patient-records', label: 'Patients' },
       { id: 'test-model', label: 'Test Model' },
     ]
@@ -446,6 +461,21 @@ const NewScanPage = ({ navigate, setAnalysisResult, setScanImage }) => {
   const [analyzing, setAnalyzing] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const fileInputRef = useRef(null);
+  const [useWebcam, setUseWebcam] = useState(false);
+  const webcamRef = useRef(null);
+  const [selectedModels, setSelectedModels] = useState([
+    "foot-ulcers-szvdf/3",
+    "foot-ulcers-szvdf/2", 
+    "foot-ulcers-szvdf/1"
+  ]);
+
+  const toggleModel = (modelId) => {
+    setSelectedModels(prev =>
+      prev.includes(modelId)
+        ? prev.filter(id => id !== modelId)
+        : [...prev, modelId]
+    );
+  };
 
   const handleAnalyze = async () => {
     if (!selectedFile) return;
@@ -457,6 +487,7 @@ const NewScanPage = ({ navigate, setAnalysisResult, setScanImage }) => {
     
     const formData = new FormData();
     formData.append('image', selectedFile);
+    formData.append('models', JSON.stringify(selectedModels));
 
     try {
       const response = await fetch('/api/analyze', { method: 'POST', body: formData });
@@ -476,45 +507,211 @@ const NewScanPage = ({ navigate, setAnalysisResult, setScanImage }) => {
     }
   };
 
+  const analyzeWebcam = async (base64Image) => {
+    setAnalyzing(true);
+    setScanImage(base64Image);
+
+    try {
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          image: base64Image,
+          models: selectedModels
+        })
+      });
+
+      const data = await response.json();
+      if (data.status === 'success') {
+        setAnalysisResult(data);
+        navigate("scan-results-patient");
+      } else {
+        alert('Analysis failed: ' + (data.error || 'Unknown error'));
+      }
+    } catch (err) {
+      alert("Webcam analysis failed");
+    }
+
+    setAnalyzing(false);
+  };
+
+  const availableModels = [
+    { id: "foot-ulcers-szvdf/1", name: "Model v1 (mAP: 92.7%)", weight: 0.927 },
+    { id: "foot-ulcers-szvdf/2", name: "Model v2 (mAP: 91.4%)", weight: 0.914 },
+    { id: "foot-ulcers-szvdf/3", name: "Model v3 (mAP: 90.6%)", weight: 0.906 }
+  ];
+
   return (
     <div className="max-w-3xl mx-auto py-8 space-y-8">
       <h1 className="text-2xl font-bold text-slate-900">New Foot Scan</h1>
       
-      <div 
-        className="bg-white border-2 border-dashed border-slate-300 rounded-3xl p-16 flex flex-col items-center justify-center text-center hover:bg-slate-50 cursor-pointer"
-        onClick={() => fileInputRef.current.click()}
-      >
-        <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={(e) => setSelectedFile(e.target.files[0])} />
-        
-        {selectedFile ? (
-          <div>
-            <img src={URL.createObjectURL(selectedFile)} alt="Preview" className="h-48 object-contain rounded-lg mb-4" />
-            <p className="font-bold text-slate-800">{selectedFile.name}</p>
-          </div>
-        ) : (
-          <>
-            <UploadCloud className="h-8 w-8 text-slate-400 mb-4" />
-            <h3 className="font-bold text-xl text-slate-700">Click to upload image</h3>
-          </>
+      {/* Model Selection */}
+      <div className="bg-white p-6 rounded-2xl border shadow-sm">
+        <h3 className="font-bold mb-4">Model Selection (Ensemble)</h3>
+        <div className="grid grid-cols-1 gap-3">
+          {availableModels.map(model => (
+            <label key={model.id} className="flex items-center gap-3 p-3 rounded-lg border hover:bg-slate-50">
+              <input
+                type="checkbox"
+                checked={selectedModels.includes(model.id)}
+                onChange={() => toggleModel(model.id)}
+                className="w-4 h-4 text-blue-600 rounded"
+              />
+              <div className="flex-1">
+                <span className="text-slate-700 font-medium">{model.name}</span>
+                <p className="text-xs text-slate-500">Weight: {model.weight}</p>
+              </div>
+            </label>
+          ))}
+        </div>
+        {selectedModels.length === 0 && (
+          <p className="text-red-600 text-sm mt-2">Please select at least one model.</p>
         )}
       </div>
 
-      <div className="flex justify-end">
-        <button 
-          onClick={handleAnalyze} 
-          disabled={!selectedFile || analyzing}
-          className="bg-blue-600 text-white px-8 py-3 rounded-xl font-bold hover:bg-blue-700 shadow-lg disabled:opacity-50"
-        >
-          {analyzing ? 'Processing...' : 'Analyze Image'}
-        </button>
-      </div>
+      <button
+        onClick={() => setUseWebcam(!useWebcam)}
+        className="mb-4 bg-slate-800 text-white px-4 py-2 rounded-lg"
+      >
+        {useWebcam ? "Switch to Upload" : "Use Webcam"}
+      </button>
+
+      {useWebcam ? (
+        <div className="bg-white border-2 border-slate-300 rounded-3xl p-8 space-y-4">
+          <Webcam
+            ref={webcamRef}
+            screenshotFormat="image/jpeg"
+            className="rounded-xl w-full"
+          />
+          <button
+            onClick={() => {
+              const imageSrc = webcamRef.current.getScreenshot();
+              if (imageSrc) {
+                analyzeWebcam(imageSrc);
+              }
+            }}
+            disabled={analyzing || selectedModels.length === 0}
+            className="bg-blue-600 text-white px-6 py-3 rounded-lg font-bold hover:bg-blue-700 disabled:opacity-50"
+          >
+            {analyzing ? 'Processing...' : 'Capture & Analyze'}
+          </button>
+        </div>
+      ) : (
+        <>
+          <div 
+            className="bg-white border-2 border-dashed border-slate-300 rounded-3xl p-16 flex flex-col items-center justify-center text-center hover:bg-slate-50 cursor-pointer"
+            onClick={() => fileInputRef.current.click()}
+          >
+            <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={(e) => setSelectedFile(e.target.files[0])} />
+            
+            {selectedFile ? (
+              <div>
+                <img src={URL.createObjectURL(selectedFile)} alt="Preview" className="h-48 object-contain rounded-lg mb-4" />
+                <p className="font-bold text-slate-800">{selectedFile.name}</p>
+              </div>
+            ) : (
+              <>
+                <UploadCloud className="h-8 w-8 text-slate-400 mb-4" />
+                <h3 className="font-bold text-xl text-slate-700">Click to upload image</h3>
+              </>
+            )}
+          </div>
+
+          <div className="flex justify-end">
+            <button 
+              onClick={handleAnalyze} 
+              disabled={!selectedFile || analyzing || selectedModels.length === 0}
+              className="bg-blue-600 text-white px-8 py-3 rounded-xl font-bold hover:bg-blue-700 shadow-lg disabled:opacity-50"
+            >
+              {analyzing ? 'Processing...' : 'Analyze Image'}
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 };
 
-const ScanResultsPatient = ({ navigate, result, image, onSave }) => {
-  const isUlcer = result?.is_ulcer ?? false;
-  const statusColor = isUlcer ? "red" : "green";
+const ConfidenceGauge = ({ value }) => {
+  const radius = 70;
+  const stroke = 10;
+  const normalizedRadius = radius - stroke * 2;
+  const circumference = normalizedRadius * 2 * Math.PI;
+  const strokeDashoffset =
+    circumference - (value / 100) * circumference;
+
+  return (
+    <svg height={radius * 2} width={radius * 2}>
+      <circle
+        stroke="#e2e8f0"
+        fill="transparent"
+        strokeWidth={stroke}
+        r={normalizedRadius}
+        cx={radius}
+        cy={radius}
+      />
+      <circle
+        stroke="#ef4444"
+        fill="transparent"
+        strokeWidth={stroke}
+        strokeDasharray={`${circumference} ${circumference}`}
+        style={{ strokeDashoffset, transition: "stroke-dashoffset 0.5s" }}
+        r={normalizedRadius}
+        cx={radius}
+        cy={radius}
+      />
+      <text
+        x="50%"
+        y="50%"
+        textAnchor="middle"
+        dy=".3em"
+        className="text-xl font-bold fill-slate-800"
+      >
+        {value}%
+      </text>
+    </svg>
+  );
+};
+
+const RiskBar = ({ score }) => {
+  let color = "bg-green-500";
+  if (score > 70) color = "bg-red-500";
+  else if (score > 40) color = "bg-yellow-500";
+
+  return (
+    <div className="w-full bg-slate-200 rounded-full h-4">
+      <div
+        className={`${color} h-4 rounded-full transition-all`}
+        style={{ width: `${score}%` }}
+      />
+    </div>
+  );
+};
+
+const ScanResultsPatient = ({ navigate, result, image, history, onSave }) => {
+  const lastScan = history[0];
+  let trend = null;
+
+  if (lastScan) {
+    if (result.riskScore > lastScan.riskScore) {
+      trend = "Condition worsening ↑";
+    } else {
+      trend = "Condition stable or improving";
+    }
+  }
+
+  const downloadPDF = async () => {
+    const input = document.getElementById("clinical-report");
+    const canvas = await html2canvas(input);
+    const imgData = canvas.toDataURL("image/png");
+
+    const pdf = new jsPDF("p", "mm", "a4");
+    const width = pdf.internal.pageSize.getWidth();
+    const height = (canvas.height * width) / canvas.width;
+
+    pdf.addImage(imgData, "PNG", 0, 0, width, height);
+    pdf.save("DFU-Clinical-Report.pdf");
+  };
 
   return (
     <div className="max-w-6xl mx-auto py-8">
@@ -523,18 +720,97 @@ const ScanResultsPatient = ({ navigate, result, image, onSave }) => {
            {image ? <img src={image} alt="Scan" className="w-full h-full object-cover rounded-xl" /> : <div className="text-center p-10">Image Expired</div>}
         </div>
 
-        <div className="space-y-8">
-          <div className={`bg-${statusColor}-50 border-l-4 border-${statusColor}-500 text-${statusColor}-800 px-6 py-5 rounded-r-xl`}>
-            <h4 className="font-extrabold text-lg">Analysis Complete</h4>
-            <p className="text-sm mt-1">{isUlcer ? "Potential abnormality detected." : "No issues detected."}</p>
+        <div id="clinical-report" className="bg-white p-10 rounded-3xl border shadow-sm space-y-8">
+
+          <h2 className="text-3xl font-extrabold text-slate-900">
+            AI Clinical Analysis Report
+          </h2>
+
+          {/* Severity Card */}
+          <div className={`p-6 rounded-xl border-l-8 ${
+            result.severity === "High"
+              ? "bg-red-50 border-red-600"
+              : result.severity === "Moderate"
+              ? "bg-yellow-50 border-yellow-500"
+              : "bg-green-50 border-green-500"
+          }`}>
+            <p className="text-lg font-bold">
+              Severity Level: {result.severity}
+            </p>
           </div>
 
-          <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
-            <h2 className="text-4xl font-extrabold text-slate-900 mb-8">{isUlcer ? "Potential Abnormality" : "Healthy"}</h2>
-            <button onClick={onSave} className="w-full bg-blue-600 text-white py-3.5 rounded-xl font-bold hover:bg-blue-700 shadow-lg">
-              Save Result to History
-            </button>
+          {/* Confidence Gauge */}
+          <div className="flex flex-col items-center">
+            <p className="text-sm text-slate-500 mb-4">
+              Model Confidence
+            </p>
+            <ConfidenceGauge value={result.confidence} />
           </div>
+
+          {/* Risk Indicator */}
+          <div>
+            <p className="text-sm text-slate-500 mb-2">
+              Risk Score
+            </p>
+            <RiskBar score={result.riskScore} />
+          </div>
+
+          {/* Recommendation */}
+          <div>
+            <p className="text-sm text-slate-500">
+              Recommended Action
+            </p>
+            <p className="font-medium text-slate-800 mt-1">
+              {result.recommendation}
+            </p>
+          </div>
+
+          {/* Trend */}
+          {trend && (
+            <div>
+              <p className="text-sm text-slate-500">Trend</p>
+              <p className={`text-xl font-bold ${
+                trend.includes("worsening") ? "text-red-600" : "text-green-600"
+              }`}>
+                {trend}
+              </p>
+            </div>
+          )}
+
+          {/* Ensemble Reliability Metrics */}
+          {result.models && (
+            <div className="bg-slate-50 p-6 rounded-xl border mt-4">
+              <h3 className="font-bold text-lg mb-4">Ensemble Reliability Metrics</h3>
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <p><span className="text-slate-500">Agreement:</span> <strong>{result.agreementPercentage}%</strong></p>
+                <p><span className="text-slate-500">Avg Confidence:</span> <strong>{result.averageConfidence}%</strong></p>
+                <p><span className="text-slate-500">Std Deviation:</span> <strong>{result.confidenceStdDev}</strong></p>
+                <p><span className="text-slate-500">Reliability Score:</span> <strong>{result.reliabilityScore}%</strong></p>
+              </div>
+              <div className="mt-4">
+                <p className="text-sm text-slate-500 mb-2">Model Predictions:</p>
+                {result.models.map((m, i) => (
+                  <div key={i} className="flex justify-between text-xs py-1 border-b border-slate-200">
+                    <span>{m.model}</span>
+                    <span className={m.prediction === "Ulcer" ? "text-red-600" : "text-green-600"}>
+                      {m.prediction} ({m.confidence}%)
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <button onClick={onSave} className="w-full bg-blue-600 text-white py-3.5 rounded-xl font-bold hover:bg-blue-700 shadow-lg">
+            Save Result to History
+          </button>
+
+          <button
+            onClick={downloadPDF}
+            className="w-full bg-slate-900 text-white py-3 rounded-xl font-bold mt-6"
+          >
+            Download Clinical Report (PDF)
+          </button>
         </div>
       </div>
     </div>
@@ -566,6 +842,33 @@ const MyHistoryPage = ({ navigate, history }) => (
 );
 
 // --- DOCTOR VIEWS ---
+const MetricCard = ({ title, value }) => (
+  <div className="bg-white p-6 rounded-xl shadow border">
+    <p className="text-sm text-slate-500">{title}</p>
+    <p className="text-3xl font-bold">{value}</p>
+  </div>
+);
+
+const DoctorKPIChart = ({ scans }) => {
+  const ulcerCount = scans.filter(s => s.result === "Ulcer").length;
+  const healthyCount = scans.filter(s => s.result === "Healthy").length;
+
+  const data = {
+    labels: ["Ulcer", "Healthy"],
+    datasets: [{
+      data: [ulcerCount, healthyCount],
+      backgroundColor: ["#ef4444", "#22c55e"]
+    }]
+  };
+
+  return (
+    <div className="bg-white p-6 rounded-2xl shadow">
+      <h3 className="font-bold text-lg text-slate-800 mb-4">Scan Distribution</h3>
+      <Pie data={data} />
+    </div>
+  );
+};
+
 const DoctorDashboard = ({ navigate, allScans }) => (
   <div className="w-full max-w-7xl mx-auto py-8 space-y-8">
     <h1 className="text-2xl font-bold text-slate-900">Doctor's Dashboard</h1>
@@ -579,23 +882,37 @@ const DoctorDashboard = ({ navigate, allScans }) => (
         <p className="text-slate-500 font-bold uppercase">Ulcers Detected</p>
         <p className="text-4xl font-extrabold text-red-600">{allScans.filter(s => s.result === 'Ulcer').length}</p>
       </div>
+      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+        <p className="text-slate-500 font-bold uppercase">Verified Scans</p>
+        <p className="text-4xl font-extrabold text-blue-600">{allScans.filter(s => s.verified).length}</p>
+      </div>
     </div>
 
-    <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
-      <div className="px-8 py-6 border-b border-slate-100 bg-slate-50">
-        <h3 className="font-bold text-lg text-slate-800">Recent Activity Feed</h3>
+    <div className="grid grid-cols-2 gap-6">
+      <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+        <div className="px-8 py-6 border-b border-slate-100 bg-slate-50">
+          <h3 className="font-bold text-lg text-slate-800">Recent Activity Feed</h3>
+        </div>
+        <table className="w-full text-sm text-left">
+          <tbody className="divide-y divide-slate-100">
+            {allScans.map((scan) => (
+              <tr key={scan.id} className="hover:bg-slate-50">
+                <td className="px-8 py-5 font-bold text-slate-800">{scan.patientName}</td>
+                <td className="px-8 py-5 text-slate-500">{scan.dateString}</td>
+                <td className="px-8 py-5"><Badge type={scan.status}>{scan.result}</Badge></td>
+                <td className="px-8 py-5">
+                  {scan.verified && (
+                    <p className="text-xs text-slate-500">
+                      Verified by {scan.verifiedBy}
+                    </p>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
-      <table className="w-full text-sm text-left">
-        <tbody className="divide-y divide-slate-100">
-          {allScans.map((scan) => (
-            <tr key={scan.id} className="hover:bg-slate-50">
-              <td className="px-8 py-5 font-bold text-slate-800">{scan.patientName}</td>
-              <td className="px-8 py-5 text-slate-500">{scan.dateString}</td>
-              <td className="px-8 py-5"><Badge type={scan.status}>{scan.result}</Badge></td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <DoctorKPIChart scans={allScans} />
     </div>
   </div>
 );
@@ -605,7 +922,135 @@ const Badge = ({ children, type }) => <span className={`px-2 py-1 rounded text-x
 
 // Placeholders for routes not fully implemented in this single-file version
 const EducationHub = () => <div className="p-10 text-center">Education Hub Content</div>;
-const PatientRecords = () => <div className="p-10 text-center">Patient Records View</div>;
+const PatientRecords = ({ allScans, userData }) => {
+  const handleVerify = async (scanId) => {
+    try {
+      await updateDoc(doc(db, 'artifacts', appId, 'scans', scanId), {
+        verified: true,
+        verifiedBy: userData?.firstName || 'Doctor',
+        verifiedAt: serverTimestamp()
+      });
+    } catch (e) {
+      console.error("Error verifying scan:", e);
+      alert("Failed to verify scan.");
+    }
+  };
+
+  return (
+    <div className="w-full max-w-6xl mx-auto py-8 space-y-8">
+      <h1 className="text-2xl font-bold text-slate-900">Patient Records</h1>
+      <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+        <table className="w-full text-sm text-left">
+          <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-100 text-xs uppercase">
+            <tr>
+              <th className="px-6 py-4">Patient</th>
+              <th className="px-6 py-4">Date</th>
+              <th className="px-6 py-4">Result</th>
+              <th className="px-6 py-4">Confidence</th>
+              <th className="px-6 py-4">Status</th>
+              <th className="px-6 py-4">Action</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {allScans.map((scan) => (
+              <tr key={scan.id} className="hover:bg-slate-50">
+                <td className="px-6 py-4 font-bold text-slate-800">{scan.patientName}</td>
+                <td className="px-6 py-4 text-slate-500">{scan.dateString}</td>
+                <td className="px-6 py-4"><Badge type={scan.status}>{scan.result}</Badge></td>
+                <td className="px-6 py-4">{scan.confidence}%</td>
+                <td className="px-6 py-4">
+                  {scan.verified ? (
+                    <span className="text-xs text-green-600 font-bold">Verified by {scan.verifiedBy}</span>
+                  ) : (
+                    <span className="text-xs text-yellow-600 font-bold">Pending</span>
+                  )}
+                </td>
+                <td className="px-6 py-4">
+                  {!scan.verified && (
+                    <button
+                      onClick={() => handleVerify(scan.id)}
+                      className="bg-blue-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-blue-700"
+                    >
+                      Verify
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
 const PatientCumulative = () => <div className="p-10 text-center">Cumulative History View</div>;
-const TestModel = () => <div className="p-10 text-center">Test Model Playground</div>;
+const TestModel = () => {
+  const [enabledModels, setEnabledModels] = useState({
+    "foot-ulcers-szvdf/3": true,
+    "foot-ulcers-szvdf/2": true,
+    "foot-ulcers-szvdf/1": true
+  });
+
+  const modelMetrics = [
+    { id: "foot-ulcers-szvdf/1", mAP: "92.7%", precision: "91.2%", recall: "86.1%" },
+    { id: "foot-ulcers-szvdf/2", mAP: "91.4%", precision: "90.9%", recall: "85.2%" },
+    { id: "foot-ulcers-szvdf/3", mAP: "90.6%", precision: "90.7%", recall: "84.3%" }
+  ];
+
+  return (
+    <div className="w-full max-w-4xl mx-auto py-8 space-y-8">
+      <h1 className="text-2xl font-bold text-slate-900">Model Performance Metrics</h1>
+      
+      {/* Model Selection */}
+      <div className="bg-white p-6 rounded-2xl shadow border">
+        <h3 className="font-bold mb-4">Model Selection (Ensemble)</h3>
+        {Object.keys(enabledModels).map(model => (
+          <label key={model} className="flex items-center gap-3 mb-2">
+            <input
+              type="checkbox"
+              checked={enabledModels[model]}
+              onChange={() =>
+                setEnabledModels(prev => ({
+                  ...prev,
+                  [model]: !prev[model]
+                }))
+              }
+              className="w-4 h-4 text-blue-600 rounded"
+            />
+            <span className="text-slate-700">{model}</span>
+          </label>
+        ))}
+      </div>
+
+      {/* Performance Metrics per Model */}
+      {modelMetrics.map(m => (
+        <div key={m.id} className={`bg-white p-6 rounded-2xl border shadow-sm ${!enabledModels[m.id] ? 'opacity-50' : ''}`}>
+          <h3 className="font-bold text-lg text-slate-800 mb-4">{m.id}</h3>
+          <div className="grid grid-cols-3 gap-6">
+            <div>
+              <p className="text-sm text-slate-500">mAP@50</p>
+              <p className="text-2xl font-bold">{m.mAP}</p>
+            </div>
+            <div>
+              <p className="text-sm text-slate-500">Precision</p>
+              <p className="text-2xl font-bold">{m.precision}</p>
+            </div>
+            <div>
+              <p className="text-sm text-slate-500">Recall</p>
+              <p className="text-2xl font-bold">{m.recall}</p>
+            </div>
+          </div>
+        </div>
+      ))}
+
+      <div className="bg-white p-6 rounded-2xl border shadow-sm">
+        <h3 className="font-bold text-lg text-slate-800 mb-4">Ensemble Information</h3>
+        <p className="text-slate-600">Platform: Roboflow</p>
+        <p className="text-slate-600">Training Dataset: Custom DFU Images</p>
+        <p className="text-slate-600">Architecture: YOLOv8</p>
+        <p className="text-slate-600 mt-2">Ensemble Method: Weighted voting based on mAP scores</p>
+      </div>
+    </div>
+  );
+};
 const ScanResultsDoctor = () => <div className="p-10 text-center">Doctor Scan Review Interface</div>;

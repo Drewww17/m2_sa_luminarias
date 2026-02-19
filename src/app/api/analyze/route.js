@@ -11,7 +11,6 @@ export async function POST(request) {
     let base64Image;
     let selectedModels = [];
     
-    // Check content type to determine how to parse the request
     const contentType = request.headers.get("content-type") || "";
     
     if (contentType.includes("application/json")) {
@@ -20,7 +19,6 @@ export async function POST(request) {
       if (!body.image) {
         return NextResponse.json({ error: "No image provided" }, { status: 400 });
       }
-      // Remove data URL prefix if present (e.g., "data:image/jpeg;base64,")
       base64Image = body.image.replace(/^data:image\/\w+;base64,/, "");
       selectedModels = body.models || [];
     } else {
@@ -32,12 +30,10 @@ export async function POST(request) {
         return NextResponse.json({ error: "No image provided" }, { status: 400 });
       }
 
-      // Convert file to base64 properly
       const bytes = await file.arrayBuffer();
       const buffer = Buffer.from(bytes);
       base64Image = buffer.toString("base64");
       
-      // Get selected models from formData
       const modelsParam = formData.get("models");
       selectedModels = modelsParam ? JSON.parse(modelsParam) : [];
     }
@@ -50,7 +46,6 @@ export async function POST(request) {
       }, { status: 400 });
     }
 
-    // Filter modelConfigs to only include selected models
     const activeModelConfigs = modelConfigs.filter(model => 
       selectedModels.includes(model.id)
     );

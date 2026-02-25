@@ -1,13 +1,12 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
+import { useRouter } from "next/navigation";
 import { 
   UploadCloud, Activity, FileText, User, Search, AlertCircle, 
   CheckCircle, ChevronRight, LogIn, PlusCircle, BookOpen, 
   Settings, LayoutDashboard, FileBarChart, Filter, ArrowRight 
 } from 'lucide-react';
-import jsPDF from "jspdf";
-import html2canvas from "html2canvas";
 import Webcam from "react-webcam";
 import { 
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, 
@@ -18,29 +17,31 @@ import {
 import { auth, db } from "@/lib/firebase";
 
 import {
-  signInAnonymously,
   onAuthStateChanged,
-  signInWithCustomToken
+  signOut
 } from "firebase/auth";
 
 import {
   collection,
-  addDoc,
   query,
   where,
   onSnapshot,
-  orderBy,
   serverTimestamp,
-  setDoc,
   doc,
   getDoc,
-  updateDoc
+  updateDoc,
+  setDoc,
+  Timestamp
 } from "firebase/firestore";
-
-const appId = "dfu-detect-app";
+import { logAuditAction } from "@/lib/auditLogs";
+import { generateHash } from "@/utils/hashGenerator";
+import { generateClinicalPdf } from "@/utils/pdfGenerator";
+import { exportPatientCsv } from "@/utils/csvExporter";
+import { MODEL_VERSION, SYSTEM_VERSION } from "@/constants/systemInfo";
 
 // --- MAIN APP COMPONENT ---
 export default function App() {
+  const router = useRouter();
   const [user, setUser] = useState(null);
   const [userData, setUserData] = useState(null);
   const [route, setRoute] = useState('landing');
@@ -49,6 +50,8 @@ export default function App() {
   const [scanHistory, setScanHistory] = useState([]);
   const [allPatients, setAllPatients] = useState([]);
   const [allScans, setAllScans] = useState([]);
+  const [doctorScansLoading, setDoctorScansLoading] = useState(false);
+  const [doctorScansError, setDoctorScansError] = useState("");
   const [selectedPatientId, setSelectedPatientId] = useState(null);
 
  
@@ -57,23 +60,20 @@ export default function App() {
 
   // 1. AUTHENTICATION
   useEffect(() => {
-    const initAuth = async () => {
-      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-        await signInWithCustomToken(auth, __initial_auth_token);
-      } else {
-        await signInAnonymously(auth);
-      }
-    };
-    initAuth();
-
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
       if (currentUser) {
-        const userRef = doc(db, 'artifacts', appId, 'users', currentUser.uid);
+        const userRef = doc(db, 'users', currentUser.uid);
         const userSnap = await getDoc(userRef);
         if (userSnap.exists()) {
-          setUserData(userSnap.data());
+          const profile = { uid: currentUser.uid, ...userSnap.data() };
+          setUserData(profile);
           if (['landing', 'login', 'signup'].includes(route)) {
+            if (profile.role === 'doctor') {
+              setRoute('doctor-dashboard');
+            } else if (profile.role === 'patient') {
+              setRoute('patient-dashboard');
+            }
           }
         }
       } else {
@@ -90,7 +90,7 @@ export default function App() {
 // PATIENT: Fetch own history
     if (userData.role === 'patient') {
       const q = query(
-        collection(db, 'artifacts', appId, 'scans'),
+        collection(db, 'scans'),
         where('userId', '==', user.uid)
       );
       
@@ -105,12 +105,23 @@ export default function App() {
 
     // DOCTOR: Fetch all patients and scans
     if (userData.role === 'doctor') {
-      const scansQuery = collection(db, 'artifacts', appId, 'scans');
-      const unsubScans = onSnapshot(scansQuery, (snapshot) => {
-        const scans = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        scans.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
-        setAllScans(scans);
-      });
+      setDoctorScansLoading(true);
+      setDoctorScansError("");
+      const scansQuery = collection(db, 'scans');
+      const unsubScans = onSnapshot(
+        scansQuery,
+        (snapshot) => {
+          const scans = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          scans.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+          setAllScans(scans);
+          setDoctorScansLoading(false);
+        },
+        (error) => {
+          console.error("Error fetching doctor scans:", error);
+          setDoctorScansError("Failed to load patient records. Check Firestore rules and doctor approval status.");
+          setDoctorScansLoading(false);
+        }
+      );
 
       return () => {
         unsubScans();
@@ -121,52 +132,88 @@ export default function App() {
 
   // --- NAVIGATION ---
   const navigate = (newRoute) => {
+    if (newRoute === "login") {
+      router.push("/login");
+      return;
+    }
+    if (newRoute === "signup") {
+      router.push("/register");
+      return;
+    }
+    if (newRoute === "admin-dashboard") {
+      router.push("/admin/dashboard");
+      return;
+    }
+
     window.scrollTo(0, 0);
     setRoute(newRoute);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await signOut(auth);
     setUserData(null);
     setScanImage(null);
     setAnalysisResult(null);
     navigate('landing');
   };
 
-  // --- DB WRITERS ---
-  const handleCreateAccount = async (profile) => {
-    if (!user) return;
-    try {
-      await setDoc(doc(db, 'artifacts', appId, 'users', user.uid), {
-        ...profile,
-        createdAt: serverTimestamp()
-      });
-      setUserData(profile);
-      navigate(profile.role === 'doctor' ? 'doctor-dashboard' : 'patient-dashboard');
-    } catch (e) {
-      console.error("Error creating account:", e);
-      alert("Failed to create account. See console.");
-    }
-  };
-
   const handleSaveScan = async (resultData, overrides = {}) => {
     if (!user || !userData) return;
     try {
-      await addDoc(collection(db, 'artifacts', appId, 'scans'), {
+      const createdAt = Timestamp.now();
+      const diagnosis = resultData.diagnosis || resultData.consensus || (resultData.is_ulcer ? 'Ulcer' : 'Healthy');
+      const confidence = Number(resultData.confidence) || 0;
+      const riskLevel = resultData.severity || 'Low';
+
+      const hashPayload = {
+        diagnosis,
+        confidence,
+        riskLevel,
+        createdAt: createdAt.toMillis(),
+        systemVersion: SYSTEM_VERSION,
+        modelVersion: MODEL_VERSION,
+      };
+      const scanHash = await generateHash(hashPayload);
+
+      const scanRef = doc(collection(db, 'scans'));
+      await setDoc(scanRef, {
+        scanId: scanRef.id,
         userId: user.uid,
         patientName: `${userData.firstName} ${userData.lastName}`,
         result: resultData.is_ulcer ? 'Ulcer' : 'Healthy',
         finalLabel: overrides.finalLabel || (resultData.is_ulcer ? 'Ulcer' : 'Healthy'),
-        diagnosis: resultData.diagnosis,
-        confidence: resultData.confidence,
+        diagnosis,
+        confidence,
+        riskLevel,
         riskScore: resultData.riskScore,
         severity: resultData.severity,
+        is_ulcer: !!resultData.is_ulcer,
+        reviewedBy: overrides.verifiedBy || null,
+        verified: (overrides.reviewStatus || 'pending') === 'verified',
         status: resultData.is_ulcer ? 'red' : 'green',
-        createdAt: serverTimestamp(),
+        createdAt,
         dateString: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
         reviewStatus: overrides.reviewStatus || 'pending',
         doctorNotes: overrides.doctorNotes || '',
         verifiedBy: overrides.verifiedBy || null,
-        verifiedAt: overrides.verifiedAt || null
+        verifiedAt: overrides.verifiedAt || null,
+        systemVersion: SYSTEM_VERSION,
+        modelVersion: MODEL_VERSION,
+        scanHash,
+      });
+
+      await setDoc(doc(db, 'reportVerifications', scanRef.id), {
+        scanId: scanRef.id,
+        userId: user.uid,
+        diagnosis,
+        confidence,
+        riskLevel,
+        reviewedBy: overrides.verifiedBy || null,
+        verified: (overrides.reviewStatus || 'pending') === 'verified',
+        timestamp: createdAt,
+        systemVersion: SYSTEM_VERSION,
+        modelVersion: MODEL_VERSION,
+        scanHash,
       });
       navigate(userData.role === 'doctor' ? 'doctor-dashboard' : 'my-history');
     } catch (e) {
@@ -183,8 +230,6 @@ export default function App() {
         <div className="w-full max-w-6xl">
           {/* PUBLIC ROUTES */}
           {route === 'landing' && <LandingPage navigate={navigate} />}
-          {route === 'login' && <LoginPage onLogin={handleCreateAccount} navigate={navigate} />} 
-          {route === 'signup' && <SignUpPage onRegister={handleCreateAccount} navigate={navigate} />}
           
           {/* PATIENT PORTAL */}
           {route === 'patient-dashboard' && <PatientDashboard navigate={navigate} history={scanHistory} userData={userData} />}
@@ -204,16 +249,29 @@ export default function App() {
               result={analysisResult} 
               image={scanImage}
               history={scanHistory}
+              userData={userData}
               onSave={() => handleSaveScan(analysisResult)} 
             />
           )}
           
-          {route === 'my-history' && <MyHistoryPage navigate={navigate} history={scanHistory} />}
+          {route === 'my-history' && <MyHistoryPage navigate={navigate} history={scanHistory} userData={userData} />}
           {route === 'education' && <EducationHub navigate={navigate} />}
           
           {/* DOCTOR PORTAL */}
           {route === 'doctor-dashboard' && <DoctorDashboard navigate={navigate} allScans={allScans} />}
-          {route === 'patient-records' && <PatientRecords navigate={navigate} allScans={allScans} userData={userData} onSelectPatient={(id) => { setSelectedPatientId(id); navigate('patient-detail'); }} />}
+          {route === 'patient-records' && (
+            <PatientRecords
+              navigate={navigate}
+              allScans={allScans}
+              userData={userData}
+              loading={doctorScansLoading}
+              error={doctorScansError}
+              onSelectPatient={(id) => {
+                setSelectedPatientId(id);
+                navigate('patient-detail');
+              }}
+            />
+          )}
           {route === 'patient-detail' && <PatientDetail navigate={navigate} allScans={allScans} patientId={selectedPatientId} />}
           {route === 'patient-cumulative' && <PatientCumulative navigate={navigate} allScans={allScans} />}
           {route === 'test-model' && <TestModel navigate={navigate} />}
@@ -248,20 +306,26 @@ const Navbar = ({ route, userData, navigate, onLogout }) => {
       { id: 'patient-records', label: 'Patients' },
       { id: 'patient-cumulative', label: 'Analytics' },
       { id: 'test-model', label: 'Test Model' },
+    ],
+    admin: [
+      { id: 'admin-dashboard', label: 'Doctor Dashboard' },
     ]
   };
+
+  const logoTarget = role === 'guest' ? 'landing' : role === 'admin' ? 'admin-dashboard' : `${role}-dashboard`;
+  const activeLinks = navLinks[role] || navLinks.guest;
 
   return (
     <nav className="bg-white border-b border-slate-200 sticky top-0 z-10 shadow-sm">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between h-20">
-          <div className="flex items-center cursor-pointer gap-3" onClick={() => navigate(role === 'guest' ? 'landing' : `${role}-dashboard`)}>
+          <div className="flex items-center cursor-pointer gap-3" onClick={() => navigate(logoTarget)}>
             <img src="/logo.png" alt="DFU-Detect Logo" className="h-10 w-auto" />
             <span className="font-extrabold text-xl text-slate-900 tracking-tight hidden sm:block">DFU-Detect</span>
           </div>
           
           <div className="hidden md:flex items-center space-x-8">
-            {navLinks[role].map(link => (
+            {activeLinks.map(link => (
               <button 
                 key={link.label}
                 onClick={() => navigate(link.id)}
@@ -682,7 +746,7 @@ const RiskBar = ({ score }) => {
   );
 };
 
-const ScanResultsPatient = ({ navigate, result, image, history, onSave }) => {
+const ScanResultsPatient = ({ navigate, result, image, history, onSave, userData }) => {
   const lastScan = history[0];
   let trend = null;
 
@@ -695,16 +759,29 @@ const ScanResultsPatient = ({ navigate, result, image, history, onSave }) => {
   }
 
   const downloadPDF = async () => {
-    const input = document.getElementById("clinical-report");
-    const canvas = await html2canvas(input);
-    const imgData = canvas.toDataURL("image/png");
+    const tempScanId = result.scanId || result.id || `TEMP-${Date.now()}`;
+    await generateClinicalPdf({
+      scan: {
+        ...result,
+        scanId: tempScanId,
+        diagnosis: result.diagnosis || result.consensus,
+        riskLevel: result.severity,
+        systemVersion: SYSTEM_VERSION,
+        modelVersion: MODEL_VERSION,
+      },
+      patient: userData,
+      doctorNotes: result.doctorNotes || "",
+      containerId: "clinical-report",
+    });
 
-    const pdf = new jsPDF("p", "mm", "a4");
-    const width = pdf.internal.pageSize.getWidth();
-    const height = (canvas.height * width) / canvas.width;
-
-    pdf.addImage(imgData, "PNG", 0, 0, width, height);
-    pdf.save("DFU-Clinical-Report.pdf");
+    const currentUid = auth.currentUser?.uid;
+    if (currentUid) {
+      await logAuditAction({
+        action: "report_exported",
+        performedBy: currentUid,
+        targetUser: userData?.uid || currentUid,
+      });
+    }
   };
 
   return (
@@ -815,29 +892,63 @@ const ScanResultsPatient = ({ navigate, result, image, history, onSave }) => {
   );
 };
 
-const MyHistoryPage = ({ navigate, history }) => (
-  <div className="w-full max-w-6xl mx-auto py-8 space-y-8">
-    <h1 className="text-2xl font-bold text-slate-900">My Scan History</h1>
-    <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
-      {history.length > 0 ? (
-        <table className="w-full text-sm text-left">
-          <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-100 text-xs uppercase">
-            <tr><th className="px-8 py-5">Date</th><th className="px-8 py-5">Result</th><th className="px-8 py-5">Note</th></tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {history.map((item) => (
-              <tr key={item.id} className="hover:bg-blue-50/30">
-                <td className="px-8 py-5 font-bold text-slate-700">{item.dateString}</td>
-                <td className="px-8 py-5"><Badge type={item.status}>{item.result}</Badge></td>
-                <td className="px-8 py-5 text-slate-400 italic">Image not retained (Privacy)</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      ) : <div className="p-8 text-center text-slate-500">No history found.</div>}
+const MyHistoryPage = ({ navigate, history, userData }) => {
+  const [exportFilter, setExportFilter] = useState("all");
+
+  const handleExportCsv = () => {
+    if (!userData) return;
+    exportPatientCsv({
+      patient: userData,
+      history,
+      filterMode: exportFilter,
+    });
+  };
+
+  return (
+    <div className="w-full max-w-6xl mx-auto py-8 space-y-8">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <h1 className="text-2xl font-bold text-slate-900">My Scan History</h1>
+        <div className="flex items-center gap-2">
+          <select
+            value={exportFilter}
+            onChange={(event) => setExportFilter(event.target.value)}
+            className="rounded-lg border border-slate-300 px-3 py-2 text-slate-700"
+          >
+            <option value="all">Export all</option>
+            <option value="ulcer">Export ulcer-only</option>
+            <option value="last30">Export last 30 days</option>
+          </select>
+          <button
+            type="button"
+            onClick={handleExportCsv}
+            className="rounded-lg px-4 py-2 text-white bg-blue-600 hover:bg-blue-700"
+          >
+            Export CSV
+          </button>
+        </div>
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+        {history.length > 0 ? (
+          <table className="w-full text-sm text-left">
+            <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-100 text-xs uppercase">
+              <tr><th className="px-8 py-5">Date</th><th className="px-8 py-5">Result</th><th className="px-8 py-5">Note</th></tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {history.map((item) => (
+                <tr key={item.id} className="hover:bg-blue-50/30">
+                  <td className="px-8 py-5 font-bold text-slate-700">{item.dateString}</td>
+                  <td className="px-8 py-5"><Badge type={item.status}>{item.result}</Badge></td>
+                  <td className="px-8 py-5 text-slate-400 italic">Image not retained (Privacy)</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : <div className="p-8 text-center text-slate-500">No history found.</div>}
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 // DOCTOR VIEWS
 const MetricCard = ({ title, value }) => (
@@ -1024,16 +1135,26 @@ const EducationHub = () => (
   </div>
 );
 
-const PatientRecords = ({ allScans, userData, onSelectPatient }) => {
+const PatientRecords = ({ allScans, userData, onSelectPatient, loading = false, error = "" }) => {
   const [filter, setFilter] = useState("all");
 
   const handleVerify = async (scanId) => {
     try {
-      await updateDoc(doc(db, 'artifacts', appId, 'scans', scanId), {
+      await updateDoc(doc(db, 'scans', scanId), {
         reviewStatus: 'verified',
         verifiedBy: userData?.firstName || 'Doctor',
         verifiedAt: serverTimestamp()
       });
+
+      const currentUid = auth.currentUser?.uid;
+      if (currentUid) {
+        await logAuditAction({
+          action: "scan_reviewed",
+          performedBy: currentUid,
+          targetUser: userData?.uid || currentUid,
+          scanId,
+        });
+      }
     } catch (e) {
       console.error("Error verifying scan:", e);
       alert("Failed to verify scan.");
@@ -1068,53 +1189,61 @@ const PatientRecords = ({ allScans, userData, onSelectPatient }) => {
       </div>
 
       <div className="bg-white border border-slate-100 rounded-3xl overflow-hidden shadow-xl">
-        <table className="w-full text-sm text-left">
-          <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-100 text-xs uppercase">
-            <tr>
-              <th className="px-6 py-4">Patient</th>
-              <th className="px-6 py-4">Date</th>
-              <th className="px-6 py-4">Result</th>
-              <th className="px-6 py-4">Severity</th>
-              <th className="px-6 py-4">Status</th>
-              <th className="px-6 py-4">Action</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {filteredScans.map((scan) => (
-              <tr key={scan.id} className="hover:bg-slate-50 cursor-pointer" onClick={() => onSelectPatient(scan.userId)}>
-                <td className="px-6 py-4 font-bold text-slate-800">{scan.patientName}</td>
-                <td className="px-6 py-4 text-slate-500">{scan.dateString}</td>
-                <td className="px-6 py-4"><Badge type={scan.status}>{scan.result}</Badge></td>
-                <td className="px-6 py-4">
-                  <span className={`px-2 py-1 rounded text-xs font-bold ${
-                    getSeverity(scan.confidence) === "High"
-                      ? "bg-red-100 text-red-700"
-                      : getSeverity(scan.confidence) === "Moderate"
-                      ? "bg-yellow-100 text-yellow-700"
-                      : "bg-green-100 text-green-700"
-                  }`}>
-                    {getSeverity(scan.confidence)}
-                  </span>
-                </td>
-                <td className="px-6 py-4">
-                  {scan.reviewStatus === 'verified' ? (
-                    <span className="text-xs text-green-600 font-bold">Verified by {scan.verifiedBy}</span>
-                  ) : (
-                    <span className="text-xs text-yellow-600 font-bold uppercase tracking-wider">Pending</span>
-                  )}
-                </td>
-                <td className="px-6 py-4">
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onSelectPatient(scan.userId); }}
-                    className="text-blue-600 font-bold hover:text-blue-800"
-                  >
-                    Review
-                  </button>
-                </td>
+        {loading ? (
+          <div className="p-8 text-center text-slate-500">Loading patient records...</div>
+        ) : error ? (
+          <div className="p-8 text-center text-red-600 font-semibold">{error}</div>
+        ) : filteredScans.length === 0 ? (
+          <div className="p-8 text-center text-slate-500">No patient records found yet.</div>
+        ) : (
+          <table className="w-full text-sm text-left">
+            <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-100 text-xs uppercase">
+              <tr>
+                <th className="px-6 py-4">Patient</th>
+                <th className="px-6 py-4">Date</th>
+                <th className="px-6 py-4">Result</th>
+                <th className="px-6 py-4">Severity</th>
+                <th className="px-6 py-4">Status</th>
+                <th className="px-6 py-4">Action</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {filteredScans.map((scan) => (
+                <tr key={scan.id} className="hover:bg-slate-50 cursor-pointer" onClick={() => onSelectPatient(scan.userId)}>
+                  <td className="px-6 py-4 font-bold text-slate-800">{scan.patientName}</td>
+                  <td className="px-6 py-4 text-slate-500">{scan.dateString}</td>
+                  <td className="px-6 py-4"><Badge type={scan.status}>{scan.result}</Badge></td>
+                  <td className="px-6 py-4">
+                    <span className={`px-2 py-1 rounded text-xs font-bold ${
+                      getSeverity(scan.confidence) === "High"
+                        ? "bg-red-100 text-red-700"
+                        : getSeverity(scan.confidence) === "Moderate"
+                        ? "bg-yellow-100 text-yellow-700"
+                        : "bg-green-100 text-green-700"
+                    }`}>
+                      {getSeverity(scan.confidence)}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4">
+                    {scan.reviewStatus === 'verified' ? (
+                      <span className="text-xs text-green-600 font-bold">Verified by {scan.verifiedBy}</span>
+                    ) : (
+                      <span className="text-xs text-yellow-600 font-bold uppercase tracking-wider">Pending</span>
+                    )}
+                  </td>
+                  <td className="px-6 py-4">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onSelectPatient(scan.userId); }}
+                      className="text-blue-600 font-bold hover:text-blue-800"
+                    >
+                      Review
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );
@@ -1184,6 +1313,8 @@ const PatientDetail = ({ navigate, allScans, patientId }) => {
 };
 
 const PatientCumulative = ({ allScans }) => {
+  const [exportFilter, setExportFilter] = useState("all");
+
   // Prepare data for charts
   const patientStats = {};
   allScans.forEach(scan => {
@@ -1195,9 +1326,71 @@ const PatientCumulative = ({ allScans }) => {
   });
   const barData = Object.values(patientStats).slice(0, 10); // Top 10 for demo
 
+  const handleExportAllCsv = () => {
+    // Export all scans as CSV
+    const filteredScans = exportFilter === 'ulcer' 
+      ? allScans.filter(s => s.finalLabel === 'Ulcer' || s.is_ulcer)
+      : exportFilter === 'last30'
+      ? allScans.filter(s => {
+          const scanDate = s.createdAt?.toDate ? s.createdAt.toDate() : new Date(s.createdAt?.seconds * 1000);
+          const thirtyDaysAgo = new Date();
+          thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+          return scanDate >= thirtyDaysAgo;
+        })
+      : allScans;
+
+    // Create CSV content
+    const headers = ['Date', 'Patient', 'Diagnosis', 'Severity', 'Confidence', 'Verified', 'Reviewed By'];
+    const rows = filteredScans.map(scan => {
+      const date = scan.createdAt?.toDate 
+        ? scan.createdAt.toDate().toLocaleDateString() 
+        : scan.dateString || 'N/A';
+      return [
+        date,
+        scan.patientName || 'N/A',
+        scan.diagnosis || scan.result || 'N/A',
+        scan.riskLevel || scan.severity || 'N/A',
+        `${Number(scan.confidence || 0).toFixed(2)}%`,
+        scan.verified ? 'Yes' : 'No',
+        scan.reviewedBy || scan.verifiedBy || 'N/A'
+      ];
+    });
+
+    const csvContent = [headers, ...rows].map(row => row.join(',')).join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `dfu-cumulative-report-${exportFilter}-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="w-full max-w-6xl mx-auto py-8 space-y-8">
-      <h1 className="text-2xl font-bold text-slate-900">Cumulative Analytics</h1>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <h1 className="text-2xl font-bold text-slate-900">Cumulative Analytics</h1>
+        <div className="flex items-center gap-2">
+          <select
+            value={exportFilter}
+            onChange={(e) => setExportFilter(e.target.value)}
+            className="rounded-lg border border-slate-300 px-3 py-2 text-slate-700"
+          >
+            <option value="all">Export all</option>
+            <option value="ulcer">Export ulcer-only</option>
+            <option value="last30">Export last 30 days</option>
+          </select>
+          <button
+            type="button"
+            onClick={handleExportAllCsv}
+            className="rounded-lg px-4 py-2 text-white bg-blue-600 hover:bg-blue-700"
+          >
+            Export CSV
+          </button>
+        </div>
+      </div>
       
       <div className="bg-white p-8 rounded-3xl border border-slate-100 shadow-xl">
         <h3 className="font-bold text-lg text-slate-800 mb-6">Ulcer vs Healthy Scans per Patient</h3>
@@ -1317,6 +1510,15 @@ const ScanResultsDoctor = ({ navigate, image, result, onSave, userData }) => {
   };
 
   const handleAction = (action) => {
+    const currentUid = auth.currentUser?.uid;
+    if (currentUid && action === 'false_positive') {
+      logAuditAction({
+        action: "doctor_override",
+        performedBy: currentUid,
+        targetUser: currentUid,
+      });
+    }
+
     const overrides = {
       doctorNotes: notes,
       verifiedBy: userData?.firstName || 'Doctor',
@@ -1445,6 +1647,29 @@ const ScanResultsDoctor = ({ navigate, image, result, onSave, userData }) => {
             className="w-full bg-blue-600 text-white py-2 rounded-lg font-semibold hover:bg-blue-700"
           >
             Save for Follow Up
+          </button>
+
+          <button
+            onClick={async () => {
+              const tempScanId = result.scanId || result.id || `TEMP-${Date.now()}`;
+              await generateClinicalPdf({
+                scan: {
+                  ...result,
+                  scanId: tempScanId,
+                  diagnosis: result.diagnosis || result.consensus,
+                  riskLevel: result.severity,
+                  reliabilityScore: reliability,
+                  systemVersion: SYSTEM_VERSION,
+                  modelVersion: MODEL_VERSION,
+                },
+                patient: userData,
+                doctorNotes: notes,
+                containerId: null,
+              });
+            }}
+            className="w-full bg-slate-900 text-white py-2 rounded-lg font-semibold hover:bg-slate-800 mt-2"
+          >
+            Download Clinical Report (PDF)
           </button>
         </div>
 

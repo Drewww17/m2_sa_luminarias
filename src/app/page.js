@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter } from "next/navigation";
 import { 
   UploadCloud, Activity, FileText, User, Search, AlertCircle, 
@@ -22,6 +22,7 @@ import {
 } from "firebase/auth";
 
 import {
+  addDoc,
   collection,
   query,
   where,
@@ -29,15 +30,17 @@ import {
   serverTimestamp,
   doc,
   getDoc,
-  updateDoc,
-  setDoc,
-  Timestamp
+  updateDoc
 } from "firebase/firestore";
 import { logAuditAction } from "@/lib/auditLogs";
-import { generateHash } from "@/utils/hashGenerator";
-import { generateClinicalPdf } from "@/utils/pdfGenerator";
+import { generateScanHash } from "@/utils/hashGenerator";
 import { exportPatientCsv } from "@/utils/csvExporter";
 import { MODEL_VERSION, SYSTEM_VERSION } from "@/constants/systemInfo";
+
+const loadClinicalPdfGenerator = async () => {
+  const module = await import("@/utils/pdfGenerator");
+  return module.generateClinicalPdf;
+};
 
 // --- MAIN APP COMPONENT ---
 export default function App() {
@@ -157,73 +160,86 @@ export default function App() {
     navigate('landing');
   };
 
-  const handleSaveScan = async (resultData, overrides = {}) => {
-    if (!user || !userData) return;
+  const handleSaveScan = async (resultData, overrides = {}, options = {}) => {
+    if (!user || !userData) return null;
     try {
-      const createdAt = Timestamp.now();
+      const navigateOnSuccess = options.navigateOnSuccess !== false;
       const diagnosis = resultData.diagnosis || resultData.consensus || (resultData.is_ulcer ? 'Ulcer' : 'Healthy');
       const confidence = Number(resultData.confidence) || 0;
       const riskLevel = resultData.severity || 'Low';
+      const verificationStatus = overrides.verificationStatus
+        || (overrides.reviewStatus === 'verified' ? 'verified' : overrides.reviewStatus === 'false_positive' ? 'false_positive' : 'pending');
 
-      const hashPayload = {
+      const scanPayload = {
         diagnosis,
         confidence,
         riskLevel,
-        createdAt: createdAt.toMillis(),
         systemVersion: SYSTEM_VERSION,
         modelVersion: MODEL_VERSION,
       };
-      const scanHash = await generateHash(hashPayload);
+      const resolvedScanId = overrides.scanId || resultData.scanId || resultData.id || null;
 
-      const scanRef = doc(collection(db, 'scans'));
-      await setDoc(scanRef, {
-        scanId: scanRef.id,
-        userId: user.uid,
-        patientName: `${userData.firstName} ${userData.lastName}`,
-        result: resultData.is_ulcer ? 'Ulcer' : 'Healthy',
-        finalLabel: overrides.finalLabel || (resultData.is_ulcer ? 'Ulcer' : 'Healthy'),
-        diagnosis,
-        confidence,
-        riskLevel,
-        riskScore: resultData.riskScore,
-        severity: resultData.severity,
-        is_ulcer: !!resultData.is_ulcer,
-        reviewedBy: overrides.verifiedBy || null,
-        verified: (overrides.reviewStatus || 'pending') === 'verified',
-        status: resultData.is_ulcer ? 'red' : 'green',
-        createdAt,
-        dateString: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-        reviewStatus: overrides.reviewStatus || 'pending',
-        doctorNotes: overrides.doctorNotes || '',
-        verifiedBy: overrides.verifiedBy || null,
-        verifiedAt: overrides.verifiedAt || null,
-        systemVersion: SYSTEM_VERSION,
-        modelVersion: MODEL_VERSION,
-        scanHash,
-      });
+      if (resolvedScanId) {
+        await updateDoc(doc(db, 'scans', resolvedScanId), {
+          finalLabel: overrides.finalLabel || (resultData.is_ulcer ? 'Ulcer' : 'Healthy'),
+          riskScore: resultData.riskScore,
+          severity: resultData.severity,
+          is_ulcer: !!resultData.is_ulcer,
+          reviewedBy: overrides.verifiedBy || null,
+          verified: verificationStatus === 'verified',
+          reviewStatus: overrides.reviewStatus || verificationStatus,
+          verificationStatus,
+          doctorNotes: overrides.doctorNotes || '',
+          verifiedBy: overrides.verifiedBy || null,
+          verifiedAt: overrides.verifiedAt || null,
+          verificationTimestamp: overrides.verifiedAt || null,
+        });
+      } else {
+        const scanHash = generateScanHash(scanPayload);
+        const newScan = {
+          userId: user.uid,
+          patientName: `${userData.firstName} ${userData.lastName}`,
+          result: resultData.is_ulcer ? 'Ulcer' : 'Healthy',
+          finalLabel: overrides.finalLabel || (resultData.is_ulcer ? 'Ulcer' : 'Healthy'),
+          ...scanPayload,
+          riskScore: resultData.riskScore,
+          severity: resultData.severity,
+          is_ulcer: !!resultData.is_ulcer,
+          reviewedBy: overrides.verifiedBy || null,
+          verified: verificationStatus === 'verified',
+          status: resultData.is_ulcer ? 'red' : 'green',
+          createdAt: serverTimestamp(),
+          dateString: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+          reviewStatus: overrides.reviewStatus || verificationStatus,
+          verificationStatus,
+          doctorNotes: overrides.doctorNotes || '',
+          verifiedBy: overrides.verifiedBy || null,
+          verifiedAt: overrides.verifiedAt || null,
+          verificationTimestamp: overrides.verifiedAt || null,
+          scanHash,
+        };
 
-      await setDoc(doc(db, 'reportVerifications', scanRef.id), {
-        scanId: scanRef.id,
-        userId: user.uid,
-        diagnosis,
-        confidence,
-        riskLevel,
-        reviewedBy: overrides.verifiedBy || null,
-        verified: (overrides.reviewStatus || 'pending') === 'verified',
-        timestamp: createdAt,
-        systemVersion: SYSTEM_VERSION,
-        modelVersion: MODEL_VERSION,
-        scanHash,
-      });
-      navigate(userData.role === 'doctor' ? 'doctor-dashboard' : 'my-history');
+        const scanRef = await addDoc(collection(db, 'scans'), newScan);
+        await updateDoc(doc(db, 'scans', scanRef.id), { scanId: scanRef.id });
+        if (navigateOnSuccess) {
+          navigate(userData.role === 'doctor' ? 'doctor-dashboard' : 'my-history');
+        }
+        return scanRef.id;
+      }
+
+      if (navigateOnSuccess) {
+        navigate(userData.role === 'doctor' ? 'doctor-dashboard' : 'my-history');
+      }
+      return resolvedScanId;
     } catch (e) {
       console.error("Error saving scan:", e);
       alert("Failed to save record.");
+      return null;
     }
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 font-sans text-slate-800 flex flex-col">
+    <div className="min-h-screen bg-slate-50 font-sans text-slate-800 flex flex-col fade-in">
       <Navbar route={route} userData={userData} navigate={navigate} onLogout={handleLogout} />
       
       <main className="flex-grow flex flex-col items-center p-4 sm:p-8">
@@ -316,7 +332,7 @@ const Navbar = ({ route, userData, navigate, onLogout }) => {
   const activeLinks = navLinks[role] || navLinks.guest;
 
   return (
-    <nav className="bg-white border-b border-slate-200 sticky top-0 z-10 shadow-sm">
+    <nav className="backdrop-blur-md bg-white/80 border-b border-slate-200 sticky top-0 z-10 shadow-md">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between h-20">
           <div className="flex items-center cursor-pointer gap-3" onClick={() => navigate(logoTarget)}>
@@ -326,10 +342,11 @@ const Navbar = ({ route, userData, navigate, onLogout }) => {
           
           <div className="hidden md:flex items-center space-x-8">
             {activeLinks.map(link => (
-              <button 
+              <button
+                type="button"
                 key={link.label}
                 onClick={() => navigate(link.id)}
-                className={`text-sm font-bold transition-colors ${route === link.id ? 'text-blue-600' : 'text-slate-500 hover:text-blue-600'}`}
+                className={`text-sm font-bold rounded-lg px-2 py-1 transition-all duration-200 ${route === link.id ? 'text-blue-600 bg-blue-50' : 'text-slate-500 hover:text-blue-600 hover:bg-slate-50'}`}
               >
                 {link.label}
               </button>
@@ -339,8 +356,8 @@ const Navbar = ({ route, userData, navigate, onLogout }) => {
           <div className="flex items-center">
             {role === 'guest' ? (
               <div className="flex items-center gap-4">
-                <button onClick={() => navigate('login')} className="text-sm font-bold text-slate-600 hover:text-blue-600">Login</button>
-                <button onClick={() => navigate('signup')} className="text-sm font-bold bg-blue-600 text-white px-5 py-2.5 rounded-xl hover:bg-blue-700 shadow-lg shadow-blue-600/20 transition-all">Sign Up</button>
+                <button type="button" onClick={() => navigate('login')} className="text-sm font-bold text-slate-600 hover:text-blue-600 transition-all duration-200">Login</button>
+                <button type="button" onClick={() => navigate('signup')} className="text-sm font-bold bg-blue-600 text-white px-5 py-2.5 rounded-xl hover:bg-blue-700 active:scale-95 shadow-lg shadow-blue-600/20 transition-all duration-150">Sign Up</button>
               </div>
             ) : (
               <div className="flex items-center gap-3">
@@ -375,10 +392,10 @@ const LandingPage = ({ navigate }) => (
         Upload a photo of the affected area to receive an instant analysis powered by advanced computer vision. Early detection saves lives.
       </p>
       <div className="flex flex-col sm:flex-row justify-center gap-4 pt-6 w-full sm:w-auto">
-        <button onClick={() => navigate('signup')} className="bg-blue-600 text-white px-8 py-4 rounded-xl font-bold hover:bg-blue-700 transition-all flex items-center justify-center gap-2 shadow-xl shadow-blue-600/30 text-lg w-full sm:w-auto">
+        <button type="button" onClick={() => navigate('signup')} className="bg-blue-600 text-white px-8 py-4 rounded-xl font-bold hover:bg-blue-700 active:scale-95 transition-all duration-150 flex items-center justify-center gap-2 shadow-xl shadow-blue-600/30 text-lg w-full sm:w-auto">
           <UploadCloud className="h-5 w-5" /> Start Scan
         </button>
-        <button onClick={() => navigate('education')} className="bg-white text-slate-700 border-2 border-slate-200 px-8 py-4 rounded-xl font-bold hover:bg-slate-50 hover:border-slate-300 transition-all text-lg w-full sm:w-auto">
+        <button type="button" onClick={() => navigate('education')} className="bg-white text-slate-700 border-2 border-slate-200 px-8 py-4 rounded-xl font-bold hover:bg-slate-50 hover:border-slate-300 active:scale-95 transition-all duration-150 text-lg w-full sm:w-auto">
           Learn More
         </button>
       </div>
@@ -600,11 +617,11 @@ const NewScanPage = ({ navigate, setAnalysisResult, setScanImage, userData }) =>
       <h1 className="text-2xl font-bold text-slate-900">New Foot Scan</h1>
       
       {/* Model Selection */}
-      <div className="bg-white p-6 rounded-2xl border shadow-sm">
-        <h3 className="font-bold mb-4">Model Selection (Ensemble)</h3>
+      <div className="bg-white p-6 rounded-2xl border shadow-lg hover:shadow-xl transition-shadow duration-300">
+        <h3 className="font-bold mb-4">Model Selection (AI Models)</h3>
         <div className="grid grid-cols-1 gap-3">
           {availableModels.map(model => (
-            <label key={model.id} className="flex items-center gap-3 p-3 rounded-lg border hover:bg-slate-50">
+            <label key={model.id} className="flex items-center gap-3 p-3 rounded-lg border hover:bg-slate-50 transition-all duration-200 cursor-pointer">
               <input
                 type="checkbox"
                 checked={selectedModels.includes(model.id)}
@@ -624,8 +641,9 @@ const NewScanPage = ({ navigate, setAnalysisResult, setScanImage, userData }) =>
       </div>
 
       <button
+        type="button"
         onClick={() => setUseWebcam(!useWebcam)}
-        className="mb-4 bg-slate-800 text-white px-4 py-2 rounded-lg"
+        className="mb-4 bg-slate-800 text-white px-4 py-2 rounded-lg hover:bg-slate-700 active:scale-95 transition-all duration-150"
       >
         {useWebcam ? "Switch to Upload" : "Use Webcam"}
       </button>
@@ -638,6 +656,7 @@ const NewScanPage = ({ navigate, setAnalysisResult, setScanImage, userData }) =>
             className="rounded-xl w-full"
           />
           <button
+            type="button"
             onClick={() => {
               const imageSrc = webcamRef.current.getScreenshot();
               if (imageSrc) {
@@ -645,7 +664,7 @@ const NewScanPage = ({ navigate, setAnalysisResult, setScanImage, userData }) =>
               }
             }}
             disabled={analyzing || selectedModels.length === 0}
-            className="bg-blue-600 text-white px-6 py-3 rounded-lg font-bold hover:bg-blue-700 disabled:opacity-50"
+            className="bg-blue-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-blue-700 active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-150"
           >
             {analyzing ? 'Processing...' : 'Capture & Analyze'}
           </button>
@@ -675,7 +694,7 @@ const NewScanPage = ({ navigate, setAnalysisResult, setScanImage, userData }) =>
             <button 
               onClick={handleAnalyze} 
               disabled={!selectedFile || analyzing || selectedModels.length === 0}
-              className="bg-blue-600 text-white px-8 py-3 rounded-xl font-bold hover:bg-blue-700 shadow-lg disabled:opacity-50"
+              className="bg-blue-600 text-white px-8 py-3 rounded-xl font-bold hover:bg-blue-700 active:scale-95 shadow-lg disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-150"
             >
               {analyzing ? 'Processing...' : 'Analyze Image'}
             </button>
@@ -760,6 +779,7 @@ const ScanResultsPatient = ({ navigate, result, image, history, onSave, userData
 
   const downloadPDF = async () => {
     const tempScanId = result.scanId || result.id || `TEMP-${Date.now()}`;
+    const generateClinicalPdf = await loadClinicalPdfGenerator();
     await generateClinicalPdf({
       scan: {
         ...result,
@@ -848,12 +868,12 @@ const ScanResultsPatient = ({ navigate, result, image, history, onSave, userData
             </div>
           )}
 
-          {/* Ensemble Reliability Metrics */}
+          {/* Model Reliability Metrics */}
           {result.models && (
             <div className="bg-slate-50 p-6 rounded-xl border mt-4">
-              <h3 className="font-bold text-lg mb-4">Ensemble Reliability Metrics</h3>
+              <h3 className="font-bold text-lg mb-4">Model Reliability Metrics</h3>
               <div className="grid grid-cols-2 gap-4 text-sm">
-                <p><span className="text-slate-500">Agreement:</span> <strong>{result.agreementPercentage}%</strong></p>
+                <p><span className="text-slate-500">Model Agreement Score:</span> <strong>{result.agreementPercentage}%</strong></p>
                 <p><span className="text-slate-500">Avg Confidence:</span> <strong>{result.averageConfidence}%</strong></p>
                 <p><span className="text-slate-500">Std Deviation:</span> <strong>{result.confidenceStdDev}</strong></p>
                 <p><span className="text-slate-500">Reliability Score:</span> <strong>{result.reliabilityScore}%</strong></p>
@@ -876,13 +896,13 @@ const ScanResultsPatient = ({ navigate, result, image, history, onSave, userData
             <AlertCircle className="inline w-3 h-3 mr-1 mb-0.5" /> AI cannot give a definitive diagnosis. Always consult a verified medical practitioner.
           </div>
 
-          <button onClick={onSave} className="w-full bg-blue-600 text-white py-3.5 rounded-xl font-bold hover:bg-blue-700 shadow-lg">
+          <button type="button" onClick={onSave} className="w-full bg-blue-600 text-white py-3.5 rounded-xl font-bold hover:bg-blue-700 active:scale-95 shadow-lg transition-all duration-150">
             Save Result to History
           </button>
 
           <button
             onClick={downloadPDF}
-            className="w-full bg-slate-900 text-white py-3 rounded-xl font-bold mt-6"
+            className="w-full bg-slate-900 text-white py-3 rounded-xl font-bold mt-6 hover:bg-slate-800 active:scale-95 transition-all duration-150"
           >
             Download Clinical Report (PDF)
           </button>
@@ -912,7 +932,7 @@ const MyHistoryPage = ({ navigate, history, userData }) => {
           <select
             value={exportFilter}
             onChange={(event) => setExportFilter(event.target.value)}
-            className="rounded-lg border border-slate-300 px-3 py-2 text-slate-700"
+            className="rounded-lg border border-slate-300 px-3 py-2 text-slate-700 transition-all duration-150 focus:ring-2 focus:ring-blue-600 focus:border-blue-600"
           >
             <option value="all">Export all</option>
             <option value="ulcer">Export ulcer-only</option>
@@ -921,22 +941,22 @@ const MyHistoryPage = ({ navigate, history, userData }) => {
           <button
             type="button"
             onClick={handleExportCsv}
-            className="rounded-lg px-4 py-2 text-white bg-blue-600 hover:bg-blue-700"
+            className="rounded-xl px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 active:scale-95 transition-all duration-150"
           >
             Export CSV
           </button>
         </div>
       </div>
 
-      <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+      <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-lg hover:shadow-xl transition-shadow duration-300">
         {history.length > 0 ? (
-          <table className="w-full text-sm text-left">
+          <table className="w-full text-sm text-left divide-y divide-slate-200">
             <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-100 text-xs uppercase">
               <tr><th className="px-8 py-5">Date</th><th className="px-8 py-5">Result</th><th className="px-8 py-5">Note</th></tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {history.map((item) => (
-                <tr key={item.id} className="hover:bg-blue-50/30">
+                <tr key={item.id} className="hover:bg-slate-50 transition-colors duration-150">
                   <td className="px-8 py-5 font-bold text-slate-700">{item.dateString}</td>
                   <td className="px-8 py-5"><Badge type={item.status}>{item.result}</Badge></td>
                   <td className="px-8 py-5 text-slate-400 italic">Image not retained (Privacy)</td>
@@ -980,22 +1000,39 @@ const KPICard = ({ title, value, type }) => {
 };
 
 const DoctorDashboard = ({ navigate, allScans }) => {
-  // 1. Calculate KPIs
-  const totalScans = allScans.length;
-  const ulcerScans = allScans.filter(s => (s.finalLabel || s.result) === 'Ulcer');
-  const ulcerCount = ulcerScans.length;
-  const healthyCount = totalScans - ulcerCount;
-  const ulcerRate = totalScans ? ((ulcerCount / totalScans) * 100).toFixed(1) : 0;
-  
-  const avgConfidence = totalScans 
-    ? (allScans.reduce((acc, s) => acc + (Number(s.confidence) || 0), 0) / totalScans).toFixed(1) 
-    : 0;
-    
-  const falsePositives = allScans.filter(s => s.reviewStatus === 'false_positive').length;
-  const highRiskCount = allScans.filter(s => (Number(s.confidence) || 0) > 85).length;
-  
-  // Mock reliability if not present, or calculate from available data
-  const reliabilityScore = totalScans ? (avgConfidence * 0.9).toFixed(1) : 0; 
+  const {
+    totalScans,
+    ulcerCount,
+    healthyCount,
+    ulcerRate,
+    avgConfidence,
+    falsePositives,
+    highRiskCount,
+    reliabilityScore,
+  } = useMemo(() => {
+    const totalScansValue = allScans.length;
+    const ulcerScans = allScans.filter((scan) => (scan.finalLabel || scan.result) === 'Ulcer');
+    const ulcerCountValue = ulcerScans.length;
+    const healthyCountValue = totalScansValue - ulcerCountValue;
+    const ulcerRateValue = totalScansValue ? ((ulcerCountValue / totalScansValue) * 100).toFixed(1) : 0;
+    const avgConfidenceValue = totalScansValue
+      ? (allScans.reduce((accumulator, scan) => accumulator + (Number(scan.confidence) || 0), 0) / totalScansValue).toFixed(1)
+      : 0;
+    const falsePositivesValue = allScans.filter((scan) => scan.reviewStatus === 'false_positive').length;
+    const highRiskCountValue = allScans.filter((scan) => (Number(scan.confidence) || 0) > 85).length;
+    const reliabilityScoreValue = totalScansValue ? (Number(avgConfidenceValue) * 0.9).toFixed(1) : 0;
+
+    return {
+      totalScans: totalScansValue,
+      ulcerCount: ulcerCountValue,
+      healthyCount: healthyCountValue,
+      ulcerRate: ulcerRateValue,
+      avgConfidence: avgConfidenceValue,
+      falsePositives: falsePositivesValue,
+      highRiskCount: highRiskCountValue,
+      reliabilityScore: reliabilityScoreValue,
+    };
+  }, [allScans]);
 
   // 2. Prepare Chart Data
   // Patient Stats for Bar Chart
@@ -1034,7 +1071,7 @@ const DoctorDashboard = ({ navigate, allScans }) => {
             AI Clinical Dashboard
           </h1>
           <span className="bg-blue-100 text-blue-700 text-xs px-3 py-1 rounded-full font-semibold">
-            AI Ensemble Powered
+            AI Model Powered
           </span>
         </div>
         <p className="text-slate-500 mt-1">
@@ -1064,7 +1101,7 @@ const DoctorDashboard = ({ navigate, allScans }) => {
       {/* ANALYTICS SECTION */}
       <div className="grid md:grid-cols-2 gap-6">
         {/* Patient Breakdown */}
-        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-lg hover:shadow-xl transition-shadow duration-300">
           <h3 className="font-bold text-lg text-slate-800 mb-6">Patient Breakdown</h3>
           <div className="h-72 w-full">
             <ResponsiveContainer width="100%" height="100%">
@@ -1082,7 +1119,7 @@ const DoctorDashboard = ({ navigate, allScans }) => {
         </div>
 
         {/* Scan Distribution */}
-        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-lg hover:shadow-xl transition-shadow duration-300">
           <h3 className="font-bold text-lg text-slate-800 mb-6">Scan Distribution</h3>
           <ResponsiveContainer width="100%" height={280}>
             <PieChart>
@@ -1105,7 +1142,7 @@ const DoctorDashboard = ({ navigate, allScans }) => {
       </div>
 
       {/* TREND */}
-      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-lg hover:shadow-xl transition-shadow duration-300">
         <h3 className="font-bold text-lg text-slate-800 mb-6">Ulcer Detection Trend</h3>
         <ResponsiveContainer width="100%" height={300}>
           <LineChart data={timeSeries}>
@@ -1123,7 +1160,20 @@ const DoctorDashboard = ({ navigate, allScans }) => {
 };
 
 const Footer = () => <footer className="bg-slate-900 text-slate-400 py-12 text-center mt-auto">© 2026 DFU-Detect</footer>;
-const Badge = ({ children, type }) => <span className={`px-2 py-1 rounded text-xs font-bold ${type === 'red' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>{children}</span>;
+const Badge = ({ children, type }) => {
+  const badgeStyles = {
+    red: "bg-red-100 text-red-700",
+    green: "bg-emerald-100 text-emerald-700",
+    verified: "bg-emerald-100 text-emerald-700",
+    pending: "bg-amber-100 text-amber-700",
+  };
+
+  return (
+    <span className={`px-3 py-1 rounded-full text-xs font-semibold ${badgeStyles[type] || "bg-slate-100 text-slate-700"}`}>
+      {children}
+    </span>
+  );
+};
 
 const EducationHub = () => (
   <div className="p-10 text-center">
@@ -1142,6 +1192,9 @@ const PatientRecords = ({ allScans, userData, onSelectPatient, loading = false, 
     try {
       await updateDoc(doc(db, 'scans', scanId), {
         reviewStatus: 'verified',
+        verificationStatus: 'verified',
+        reviewedBy: userData?.firstName || 'Doctor',
+        verificationTimestamp: serverTimestamp(),
         verifiedBy: userData?.firstName || 'Doctor',
         verifiedAt: serverTimestamp()
       });
@@ -1430,8 +1483,8 @@ const TestModel = () => {
       <h1 className="text-2xl font-bold text-slate-900">Model Performance Metrics</h1>
       
       {/* Model Selection */}
-      <div className="bg-white p-6 rounded-2xl shadow border">
-        <h3 className="font-bold mb-4">Model Selection (Ensemble)</h3>
+      <div className="bg-white p-6 rounded-2xl shadow-lg hover:shadow-xl transition-shadow duration-300 border">
+        <h3 className="font-bold mb-4">Model Selection (AI Models)</h3>
         {Object.keys(enabledModels).map(model => (
           <label key={model} className="flex items-center gap-3 mb-2">
             <input
@@ -1471,12 +1524,12 @@ const TestModel = () => {
         </div>
       ))}
 
-      <div className="bg-white p-6 rounded-2xl border shadow-sm">
-        <h3 className="font-bold text-lg text-slate-800 mb-4">Ensemble Information</h3>
+      <div className="bg-white p-6 rounded-2xl border shadow-lg hover:shadow-xl transition-shadow duration-300">
+        <h3 className="font-bold text-lg text-slate-800 mb-4">Model Information</h3>
         <p className="text-slate-600">Platform: Roboflow</p>
         <p className="text-slate-600">Training Dataset: Custom DFU Images</p>
         <p className="text-slate-600">Architecture: YOLOv8</p>
-        <p className="text-slate-600 mt-2">Ensemble Method: Weighted voting based on mAP scores</p>
+        <p className="text-slate-600 mt-2">Model Fusion Method: Weighted voting based on mAP scores</p>
       </div>
     </div>
   );
@@ -1484,13 +1537,17 @@ const TestModel = () => {
 
 const ScanResultsDoctor = ({ navigate, image, result, onSave, userData }) => {
   const [notes, setNotes] = useState("");
+  const [savedScanId, setSavedScanId] = useState(result?.scanId || result?.id || null);
+  const [localVerificationStatus, setLocalVerificationStatus] = useState(
+    result?.verificationStatus || result?.reviewStatus || "pending"
+  );
 
   if (!result) return null;
 
   const confidence = Number(result.confidence) || 0;
   const isUlcer = result.is_ulcer;
 
-  // Derived metrics (from ensemble)
+  // Derived metrics (from model outputs)
   // API returns agreementPercentage, confidenceStdDev, models
   const agreement = Number(result.agreementPercentage || result.agreement) || 0;
   const stdDev = Number(result.confidenceStdDev || result.stdDeviation) || 0;
@@ -1509,7 +1566,7 @@ const ScanResultsDoctor = ({ navigate, image, result, onSave, userData }) => {
     return "text-green-600";
   };
 
-  const handleAction = (action) => {
+  const handleAction = useCallback(async (action) => {
     const currentUid = auth.currentUser?.uid;
     if (currentUid && action === 'false_positive') {
       logAuditAction({
@@ -1523,11 +1580,40 @@ const ScanResultsDoctor = ({ navigate, image, result, onSave, userData }) => {
       doctorNotes: notes,
       verifiedBy: userData?.firstName || 'Doctor',
       verifiedAt: serverTimestamp(),
+      verificationStatus: action === 'verify' ? 'verified' : action === 'false_positive' ? 'false_positive' : 'pending',
       reviewStatus: action === 'verify' ? 'verified' : action === 'false_positive' ? 'false_positive' : 'pending',
+      scanId: savedScanId,
       finalLabel: action === 'verify' ? result.consensus : action === 'false_positive' ? (result.consensus === 'Ulcer' ? 'Healthy' : 'Ulcer') : result.consensus
     };
-    onSave(result, overrides);
-  };
+
+    // If scan already exists in Firestore, just update verification fields (no hash change)
+    if (action === 'verify' && savedScanId) {
+      await updateDoc(doc(db, 'scans', savedScanId), {
+        verificationStatus: 'verified',
+        reviewStatus: 'verified',
+        reviewedBy: userData?.firstName || 'Doctor',
+        verifiedBy: userData?.firstName || 'Doctor',
+        verificationTimestamp: serverTimestamp(),
+        verifiedAt: serverTimestamp(),
+        doctorNotes: notes,
+      });
+      setLocalVerificationStatus('verified');
+      return;
+    }
+
+    // Otherwise save the scan first (creates new doc with hash), then track its ID
+    const newScanId = await onSave(result, overrides, { navigateOnSuccess: false });
+    if (newScanId) {
+      setSavedScanId(newScanId);
+      if (action === 'verify') {
+        setLocalVerificationStatus('verified');
+      }
+    }
+  }, [notes, onSave, result, savedScanId, userData]);
+
+  const handleVerify = useCallback(async () => {
+    await handleAction('verify');
+  }, [handleAction]);
 
   return (
     <div className="max-w-7xl mx-auto py-10 grid lg:grid-cols-2 gap-10">
@@ -1536,7 +1622,7 @@ const ScanResultsDoctor = ({ navigate, image, result, onSave, userData }) => {
       <div className="space-y-6">
 
         {/* Image */}
-        <div className="bg-white p-6 rounded-2xl shadow-md">
+        <div className="bg-white p-6 rounded-2xl shadow-lg hover:shadow-xl transition-shadow duration-300">
           {image ? (
             <img src={image} alt="Scan" className="rounded-xl w-full object-cover" />
           ) : (
@@ -1545,7 +1631,7 @@ const ScanResultsDoctor = ({ navigate, image, result, onSave, userData }) => {
         </div>
 
         {/* AI Summary */}
-        <div className="bg-white p-6 rounded-2xl shadow-md space-y-4">
+        <div className="bg-white p-6 rounded-2xl shadow-lg hover:shadow-xl transition-shadow duration-300 space-y-4">
           <h2 className="text-xl font-bold">AI Analysis Summary</h2>
           <div className="flex justify-between">
             <span>Prediction:</span>
@@ -1567,12 +1653,12 @@ const ScanResultsDoctor = ({ navigate, image, result, onSave, userData }) => {
           </div>
         </div>
 
-        {/* Ensemble Metrics */}
-        <div className="bg-white p-6 rounded-2xl shadow-md space-y-4">
-          <h2 className="text-lg font-bold">Ensemble Reliability Metrics</h2>
+        {/* Model Reliability Metrics */}
+        <div className="bg-white p-6 rounded-2xl shadow-lg hover:shadow-xl transition-shadow duration-300 space-y-4">
+          <h2 className="text-lg font-bold">Model Reliability Metrics</h2>
 
           <div className="grid grid-cols-2 gap-4 text-sm">
-            <div>Agreement:</div>
+            <div>Model Agreement Score:</div>
             <div className="font-bold">{agreement.toFixed(2)}%</div>
 
             <div>Confidence Deviation:</div>
@@ -1583,7 +1669,7 @@ const ScanResultsDoctor = ({ navigate, image, result, onSave, userData }) => {
           </div>
 
           <p className="text-xs text-slate-500 mt-2">
-            Higher agreement and lower deviation indicate more stable ensemble predictions.
+            Higher agreement and lower deviation indicate more stable model predictions.
           </p>
         </div>
       </div>
@@ -1592,9 +1678,9 @@ const ScanResultsDoctor = ({ navigate, image, result, onSave, userData }) => {
       <div className="space-y-6">
 
         {/* Model Breakdown */}
-        <div className="bg-white p-6 rounded-2xl shadow-md">
+        <div className="bg-white p-6 rounded-2xl shadow-lg hover:shadow-xl transition-shadow duration-300">
           <h2 className="text-lg font-bold mb-4">Model Breakdown</h2>
-          <table className="w-full text-sm">
+          <table className="w-full text-sm divide-y divide-slate-200">
             <thead>
               <tr className="text-left text-slate-500">
                 <th>Model</th>
@@ -1604,7 +1690,7 @@ const ScanResultsDoctor = ({ navigate, image, result, onSave, userData }) => {
             </thead>
             <tbody>
               {modelBreakdown.map((m, index) => (
-                <tr key={index} className="border-t">
+                <tr key={index} className="border-t hover:bg-slate-50 transition-colors duration-150">
                   <td className="py-2">{m.model}</td>
                   <td className={m.prediction === "Ulcer" ? "text-red-600" : "text-green-600"}>
                     {m.prediction}
@@ -1617,57 +1703,74 @@ const ScanResultsDoctor = ({ navigate, image, result, onSave, userData }) => {
         </div>
 
         {/* Doctor Review */}
-        <div className="bg-white p-6 rounded-2xl shadow-md space-y-4">
+        <div className="bg-white p-6 rounded-2xl shadow-lg hover:shadow-xl transition-shadow duration-300 space-y-4">
           <h2 className="text-lg font-bold">Doctor Review</h2>
 
           <textarea
             placeholder="Enter clinical observations..."
-            className="w-full border border-slate-200 rounded-lg p-3 text-sm"
+            className="w-full border border-slate-200 rounded-lg p-3 text-sm transition-all duration-150 focus:ring-2 focus:ring-blue-600 focus:border-blue-600"
             rows="4"
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
           />
 
-          <button 
-            onClick={() => handleAction('verify')}
-            className="w-full bg-green-600 text-white py-2 rounded-lg font-semibold hover:bg-green-700"
+          <button
+            type="button"
+            onClick={handleVerify}
+            className="w-full bg-green-600 text-white py-2 rounded-lg font-semibold hover:bg-green-700 active:scale-95 transition-all duration-150 disabled:opacity-60 disabled:cursor-not-allowed"
           >
             Verify AI Result
           </button>
 
-          <button 
+          <p className="text-xs text-slate-500">
+            Current verification status:{" "}
+            <span className={`px-3 py-1 text-xs font-semibold rounded-full ${localVerificationStatus === 'verified' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+              {localVerificationStatus === 'verified' ? 'Verified' : 'Pending'}
+            </span>
+          </p>
+
+          <button
+            type="button"
             onClick={() => handleAction('false_positive')}
-            className="w-full bg-red-100 text-red-600 border border-red-400 py-2 rounded-lg font-semibold hover:bg-red-200"
+            className="w-full bg-red-100 text-red-600 border border-red-400 py-2 rounded-lg font-semibold hover:bg-red-200 active:scale-95 transition-all duration-150"
           >
             Mark False Positive (Override)
           </button>
 
-          <button 
+          <button
+            type="button"
             onClick={() => handleAction('pending')}
-            className="w-full bg-blue-600 text-white py-2 rounded-lg font-semibold hover:bg-blue-700"
+            className="w-full bg-blue-600 text-white py-2 rounded-lg font-semibold hover:bg-blue-700 active:scale-95 transition-all duration-150"
           >
             Save for Follow Up
           </button>
 
           <button
+            type="button"
             onClick={async () => {
-              const tempScanId = result.scanId || result.id || `TEMP-${Date.now()}`;
+              if (!savedScanId) {
+                alert("Please verify or save the scan first before downloading the report.");
+                return;
+              }
+              const generateClinicalPdf = await loadClinicalPdfGenerator();
               await generateClinicalPdf({
                 scan: {
                   ...result,
-                  scanId: tempScanId,
+                  scanId: savedScanId,
                   diagnosis: result.diagnosis || result.consensus,
                   riskLevel: result.severity,
                   reliabilityScore: reliability,
                   systemVersion: SYSTEM_VERSION,
                   modelVersion: MODEL_VERSION,
+                  verificationStatus: localVerificationStatus,
+                  reviewedBy: localVerificationStatus === 'verified' ? (userData?.firstName || 'Doctor') : null,
                 },
                 patient: userData,
                 doctorNotes: notes,
                 containerId: null,
               });
             }}
-            className="w-full bg-slate-900 text-white py-2 rounded-lg font-semibold hover:bg-slate-800 mt-2"
+            className="w-full bg-slate-900 text-white py-2 rounded-lg font-semibold hover:bg-slate-800 active:scale-95 transition-all duration-150 mt-2"
           >
             Download Clinical Report (PDF)
           </button>

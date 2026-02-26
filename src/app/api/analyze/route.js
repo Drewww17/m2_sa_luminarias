@@ -113,7 +113,7 @@ export async function POST(request) {
       (1 - stdDeviation / 100) *
       (mean / 100)) * 100;
 
-    // Severity and recommendation based on ensemble
+    // Severity and recommendation based on model consensus
     let severity = "None";
     let riskScore = 0;
     let recommendation = "";

@@ -95,22 +95,22 @@ export default function AdminAnalyticsPage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-100 p-6">
+    <main className="min-h-screen bg-slate-100 p-6 fade-in">
       <section className="max-w-7xl mx-auto space-y-6">
-        <div className="bg-white rounded-2xl shadow-md p-6">
+        <div className="bg-white rounded-2xl shadow-lg hover:shadow-xl transition-shadow duration-300 p-6">
           <h1 className="text-2xl font-bold text-slate-900">Admin Analytics Dashboard</h1>
           <p className="text-slate-600 mt-1">System: {SYSTEM_VERSION} | Model: {MODEL_VERSION}</p>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white rounded-2xl shadow-md p-5"><p className="text-slate-500 text-sm">Total Scans</p><p className="text-2xl font-bold text-slate-900">{metrics.totalScans}</p></div>
-          <div className="bg-white rounded-2xl shadow-md p-5"><p className="text-slate-500 text-sm">High Risk Cases</p><p className="text-2xl font-bold text-red-500">{metrics.highRisk}</p></div>
-          <div className="bg-white rounded-2xl shadow-md p-5"><p className="text-slate-500 text-sm">Verified Scans</p><p className="text-2xl font-bold text-emerald-500">{metrics.verifiedScans}</p></div>
-          <div className="bg-white rounded-2xl shadow-md p-5"><p className="text-slate-500 text-sm">Pending Reviews</p><p className="text-2xl font-bold text-slate-900">{metrics.pendingReviews}</p></div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+          <div className="bg-white rounded-2xl shadow-lg hover:shadow-xl transition-shadow duration-300 p-5"><p className="text-slate-500 text-sm">Total Scans</p><p className="text-2xl font-bold text-slate-900">{metrics.totalScans}</p></div>
+          <div className="bg-white rounded-2xl shadow-lg hover:shadow-xl transition-shadow duration-300 p-5"><p className="text-slate-500 text-sm">High Risk Cases</p><p className="text-2xl font-bold text-red-500">{metrics.highRisk}</p></div>
+          <div className="bg-white rounded-2xl shadow-lg hover:shadow-xl transition-shadow duration-300 p-5"><p className="text-slate-500 text-sm">Verified Scans</p><p className="text-2xl font-bold text-emerald-500">{metrics.verifiedScans}</p></div>
+          <div className="bg-white rounded-2xl shadow-lg hover:shadow-xl transition-shadow duration-300 p-5"><p className="text-slate-500 text-sm">Pending Reviews</p><p className="text-2xl font-bold text-slate-900">{metrics.pendingReviews}</p></div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="bg-white rounded-2xl shadow-md p-6">
+          <div className="bg-white rounded-2xl shadow-lg hover:shadow-xl transition-shadow duration-300 p-6">
             <h2 className="text-lg font-bold text-slate-900 mb-4">Monthly Scan Count</h2>
             <div className="h-72">
               <ResponsiveContainer width="100%" height="100%">
@@ -125,7 +125,7 @@ export default function AdminAnalyticsPage() {
             </div>
           </div>
 
-          <div className="bg-white rounded-2xl shadow-md p-6">
+          <div className="bg-white rounded-2xl shadow-lg hover:shadow-xl transition-shadow duration-300 p-6">
             <h2 className="text-lg font-bold text-slate-900 mb-4">Ulcer vs Healthy</h2>
             <div className="h-72">
               <ResponsiveContainer width="100%" height="100%">
@@ -142,9 +142,9 @@ export default function AdminAnalyticsPage() {
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl shadow-md p-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-white rounded-2xl shadow-lg hover:shadow-xl transition-shadow duration-300 p-6 grid grid-cols-1 md:grid-cols-3 gap-6">
           <p className="text-slate-700"><span className="font-bold text-slate-900">Ulcer detection rate:</span> {metrics.ulcerRate.toFixed(1)}%</p>
-          <p className="text-slate-700"><span className="font-bold text-slate-900">Doctor agreement rate:</span> {metrics.doctorAgreementRate.toFixed(1)}%</p>
+          <p className="text-slate-700"><span className="font-bold text-slate-900">Model Agreement Score:</span> {metrics.doctorAgreementRate.toFixed(1)}%</p>
           <p className="text-slate-700"><span className="font-bold text-slate-900">False positive rate:</span> {metrics.falsePositiveRate.toFixed(1)}%</p>
           <p className="text-slate-700"><span className="font-bold text-slate-900">Average confidence:</span> {metrics.averageConfidence.toFixed(2)}%</p>
         </div>

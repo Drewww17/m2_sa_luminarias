@@ -3,18 +3,8 @@
 import { use, useEffect, useMemo, useState } from "react";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { generateHash } from "@/utils/hashGenerator";
+import { generateScanHash } from "@/utils/hashGenerator";
 import { MODEL_VERSION, SYSTEM_VERSION } from "@/constants/systemInfo";
-
-function extractCreatedAt(scan) {
-  if (scan?.createdAt?.toMillis) {
-    return scan.createdAt.toMillis();
-  }
-  if (scan?.createdAt?.seconds) {
-    return scan.createdAt.seconds * 1000;
-  }
-  return scan?.createdAt || "";
-}
 
 export default function VerifyScanPage({ params }) {
   const { scanId } = use(params);
@@ -29,7 +19,12 @@ export default function VerifyScanPage({ params }) {
       setNotFound(false);
 
       try {
-        const snapshot = await getDoc(doc(db, "reportVerifications", scanId));
+        // Try "scans" collection first, then "reportVerifications" as fallback
+        let snapshot = await getDoc(doc(db, "scans", scanId));
+        if (!snapshot.exists()) {
+          snapshot = await getDoc(doc(db, "reportVerifications", scanId));
+        }
+
         if (!snapshot.exists()) {
           setNotFound(true);
           setLoading(false);
@@ -37,19 +32,23 @@ export default function VerifyScanPage({ params }) {
         }
 
         const scanData = { id: snapshot.id, ...snapshot.data() };
-        const recomputed = await generateHash({
-          diagnosis: scanData.diagnosis,
-          confidence: Number(scanData.confidence || 0),
-          riskLevel: scanData.riskLevel || scanData.severity || "Unknown",
-          createdAt: extractCreatedAt({ createdAt: scanData.timestamp }),
-          systemVersion: scanData.systemVersion || SYSTEM_VERSION,
-          modelVersion: scanData.modelVersion || MODEL_VERSION,
-        });
-
-        setValid(recomputed === scanData.scanHash);
         setScan(scanData);
+
+        // Use EXACT stored values - must match creation logic exactly
+        const normalizedData = {
+          diagnosis: scanData.diagnosis,
+          confidence: Number(scanData.confidence) || 0,
+          riskLevel: scanData.riskLevel || 'Low',
+          systemVersion: scanData.systemVersion,
+          modelVersion: scanData.modelVersion,
+        };
+
+        const recomputedHash = generateScanHash(normalizedData);
+
+        setValid(recomputedHash === scanData.scanHash);
         setLoading(false);
-      } catch {
+      } catch (err) {
+        console.error("Verification error:", err);
         setNotFound(true);
         setLoading(false);
       }
@@ -59,17 +58,13 @@ export default function VerifyScanPage({ params }) {
   }, [scanId]);
 
   const statusText = useMemo(() => {
-    if (notFound) {
-      return "Invalid or Tampered Report";
-    }
-    if (valid) {
-      return "Report Verified";
-    }
+    if (notFound) return "Invalid or Tampered Report";
+    if (valid) return "Report Verified";
     return "Integrity Compromised";
   }, [notFound, valid]);
 
   return (
-    <main className="min-h-screen bg-slate-100 flex items-center justify-center p-6">
+    <main className="min-h-screen bg-slate-100 flex items-center justify-center p-6" style={{ color: "#1e293b" }}>
       <section className="w-full max-w-2xl bg-white rounded-2xl shadow-md p-8">
         <h1 className="text-2xl font-bold text-slate-900">Report Verification</h1>
 
@@ -86,8 +81,9 @@ export default function VerifyScanPage({ params }) {
                 <p><span className="font-semibold text-slate-900">Diagnosis:</span> {scan.diagnosis || scan.result}</p>
                 <p><span className="font-semibold text-slate-900">Confidence:</span> {Number(scan.confidence || 0).toFixed(2)}%</p>
                 <p><span className="font-semibold text-slate-900">Risk level:</span> {scan.riskLevel || scan.severity || "N/A"}</p>
-                <p><span className="font-semibold text-slate-900">Doctor verification:</span> {scan.reviewedBy || scan.verifiedBy || "N/A"}</p>
-                <p><span className="font-semibold text-slate-900">Timestamp:</span> {scan.timestamp?.toDate ? scan.timestamp.toDate().toLocaleString() : "N/A"}</p>
+                <p><span className="font-semibold text-slate-900">Doctor verification:</span> {scan.verificationStatus || scan.reviewStatus || "pending"}</p>
+                <p><span className="font-semibold text-slate-900">Reviewed by:</span> {scan.reviewedBy || scan.verifiedBy || "N/A"}</p>
+                <p><span className="font-semibold text-slate-900">Timestamp:</span> {scan.createdAt?.toDate ? scan.createdAt.toDate().toLocaleString() : scan.timestamp?.toDate ? scan.timestamp.toDate().toLocaleString() : "N/A"}</p>
                 <p><span className="font-semibold text-slate-900">System:</span> {scan.systemVersion || SYSTEM_VERSION}</p>
                 <p><span className="font-semibold text-slate-900">Model:</span> {scan.modelVersion || MODEL_VERSION}</p>
               </div>

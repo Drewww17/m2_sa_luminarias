@@ -48,7 +48,12 @@ export async function generateClinicalPdf({
   doc.text(`System: ${scan.systemVersion || SYSTEM_VERSION}`, margin, 24);
   doc.text(`Model: ${scan.modelVersion || MODEL_VERSION}`, margin, 29);
 
-  const verificationUrl = `${window.location.origin}/verify/${scan.scanId || scan.id}`;
+  const resolvedScanId = scan.scanId || scan.id;
+  if (!resolvedScanId) {
+    throw new Error("Missing scanId for report verification URL.");
+  }
+
+  const verificationUrl = `${window.location.origin}/verify/${resolvedScanId}`;
   const qrDataUrl = await QRCode.toDataURL(verificationUrl, {
     margin: 1,
     width: 220,
@@ -65,7 +70,7 @@ export async function generateClinicalPdf({
     body: [
       ["Patient Name", patient?.fullName || "N/A"],
       ["Patient ID", patient?.systemId || patient?.uid || "N/A"],
-      ["Scan ID", scan.scanId || scan.id || "N/A"],
+      ["Scan ID", resolvedScanId],
       ["Diagnosis", scan.diagnosis || scan.result || "N/A"],
       ["Confidence", `${Number(scan.confidence || 0).toFixed(2)}%`],
       ["Risk Classification", scan.riskLevel || scan.severity || "N/A"],
@@ -111,5 +116,5 @@ export async function generateClinicalPdf({
   );
   doc.text("Doctor Signature: __________________________", margin, disclaimerY + 8);
 
-  doc.save(`DFU-Clinical-Report-${scan.scanId || Date.now()}.pdf`);
+  doc.save(`DFU-Clinical-Report-${resolvedScanId || Date.now()}.pdf`);
 }

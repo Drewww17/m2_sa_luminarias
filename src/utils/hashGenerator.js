@@ -1,34 +1,21 @@
-function stableSerialize(value) {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value);
-  }
+import CryptoJS from "crypto-js";
 
-  if (Array.isArray(value)) {
-    return `[${value.map(stableSerialize).join(",")}]`;
-  }
+export function generateScanHash(scan) {
+  // Normalize all values with defaults to ensure consistency
+  const confidence = Number(scan.confidence) || 0;
+  const diagnosis = scan.diagnosis || "";
+  const modelVersion = scan.modelVersion || "";
+  const riskLevel = scan.riskLevel || "Low";
+  const systemVersion = scan.systemVersion || "";
 
-  const keys = Object.keys(value).sort();
-  const content = keys
-    .map((key) => `${JSON.stringify(key)}:${stableSerialize(value[key])}`)
-    .join(",");
-  return `{${content}}`;
-}
-
-function toHex(bytes) {
-  return Array.from(bytes)
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-export async function generateHash(data) {
-  const payload = stableSerialize(data);
-
-  if (typeof window !== "undefined" && window.crypto?.subtle) {
-    const encoded = new TextEncoder().encode(payload);
-    const digest = await window.crypto.subtle.digest("SHA-256", encoded);
-    return toHex(new Uint8Array(digest));
-  }
-
-  const { createHash } = await import("crypto");
-  return createHash("sha256").update(payload).digest("hex");
+  // Create string with explicit ordering (alphabetical) for consistent hashing
+  const hashInput = JSON.stringify({
+    confidence,
+    diagnosis,
+    modelVersion,
+    riskLevel,
+    systemVersion,
+  });
+  
+  return CryptoJS.SHA256(hashInput).toString();
 }

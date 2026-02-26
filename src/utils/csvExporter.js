@@ -68,13 +68,13 @@ export function exportPatientCsv({ patient, history, filterMode = "all" }) {
       : "Low";
 
   const summaryRows = [
-    ["Section", "Patient Summary"],
-    ["Name", patient.fullName || `${patient.firstName || ""} ${patient.lastName || ""}`.trim()],
+    ["Field", "Value"],
+    ["Name", patient.fullName || `${patient.firstName || ""} ${patient.lastName || ""}`.trim() || "N/A"],
     ["ID", patient.systemId || patient.uid || "N/A"],
     ["Total scans", totalScans],
     ["Ulcer rate", ulcerRate],
     ["Risk classification", riskClassification],
-    ["Generated date", new Date().toLocaleString()],
+    ["Generated date", new Date().toLocaleString("en-US")],
     ["System version", SYSTEM_VERSION],
     ["Model version", MODEL_VERSION],
   ];
@@ -89,15 +89,21 @@ export function exportPatientCsv({ patient, history, filterMode = "all" }) {
     "Reviewed By": scan.reviewedBy || scan.verifiedBy || "N/A",
   }));
 
-  const summaryCsv = Papa.unparse(summaryRows);
-  const historyCsv = Papa.unparse(historyRows);
-  const csvContent = `${summaryCsv}\n\nSection,Scan History\n${historyCsv}`;
+  const summaryCsv = Papa.unparse(summaryRows, { header: false });
+  const historyCsv = Papa.unparse(historyRows, {
+    columns: ["Date", "Diagnosis", "Severity", "Confidence", "Priority", "Verified", "Reviewed By"],
+  });
+  const csvContent = `Patient Summary\n${summaryCsv}\n\nScan History\n${historyCsv}`;
 
   const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `dfu-patient-report-${filterMode}-${new Date().toISOString().slice(0, 10)}.csv`;
+  const safePatientName = (patient.fullName || `${patient.firstName || ""}-${patient.lastName || ""}`)
+    .trim()
+    .replace(/\s+/g, "-")
+    .toLowerCase() || "patient";
+  link.download = `dfu-detect-${safePatientName}-scan-history-${new Date().toISOString().slice(0, 10)}.csv`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);

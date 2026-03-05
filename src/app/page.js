@@ -66,7 +66,6 @@ export default function App() {
   
   // App Data State
   const [scanHistory, setScanHistory] = useState([]);
-  const [allPatients, setAllPatients] = useState([]);
   const [allScans, setAllScans] = useState([]);
   const [doctorScansLoading, setDoctorScansLoading] = useState(true);
   const [doctorScansError, setDoctorScansError] = useState("");
@@ -293,7 +292,13 @@ export default function App() {
         />
       )}
 
-      {route === 'my-history' && <MyHistoryPage navigate={navigate} history={scanHistory} userData={userData} />}
+      {route === 'my-history' && (
+        <MyHistoryPage
+          navigate={navigate}
+          history={userData?.role === 'doctor' ? allScans : scanHistory}
+          userData={userData}
+        />
+      )}
       {route === 'education' && <EducationHub navigate={navigate} />}
 
       {(route === 'doctor-dashboard' || route === 'clinical-overview' || route === 'patient-cumulative') && (
@@ -1063,6 +1068,7 @@ const ScanResultsPatient = ({ navigate, result, image, history, onSave, userData
 
 const MyHistoryPage = ({ navigate, history, userData }) => {
   const [exportFilter, setExportFilter] = useState("all");
+  const isDoctorView = userData?.role === "doctor";
 
   const handleExportCsv = () => {
     if (!userData) return;
@@ -1076,7 +1082,7 @@ const MyHistoryPage = ({ navigate, history, userData }) => {
   return (
     <div className="w-full max-w-6xl mx-auto py-8 space-y-8">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <h1 className="text-2xl font-bold text-slate-900">My Scan History</h1>
+        <h1 className="text-2xl font-bold text-slate-900">{isDoctorView ? "Scan History" : "My Scan History"}</h1>
         <div className="flex items-center gap-2">
           <select
             value={exportFilter}
@@ -1102,33 +1108,32 @@ const MyHistoryPage = ({ navigate, history, userData }) => {
           <div className="overflow-x-auto">
           <table className="w-full text-sm text-left divide-y divide-slate-200">
             <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-100 text-xs uppercase">
-              <tr><th className="px-4 sm:px-8 py-4 sm:py-5">Date</th><th className="px-4 sm:px-8 py-4 sm:py-5">Result</th><th className="px-4 sm:px-8 py-4 sm:py-5 hidden sm:table-cell">Note</th></tr>
+              <tr>
+                <th className="px-4 sm:px-8 py-4 sm:py-5">Date</th>
+                {isDoctorView ? <th className="px-4 sm:px-8 py-4 sm:py-5">Patient</th> : null}
+                <th className="px-4 sm:px-8 py-4 sm:py-5">Result</th>
+                <th className="px-4 sm:px-8 py-4 sm:py-5 hidden sm:table-cell">Note</th>
+              </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {history.map((item) => (
                 <tr key={item.id} className="hover:bg-slate-50 transition-colors duration-150">
-                  <td className="px-4 sm:px-8 py-4 sm:py-5 font-bold text-slate-700">{item.dateString}</td>
+                  <td className="px-4 sm:px-8 py-4 sm:py-5 font-bold text-slate-700">{item.dateString || "N/A"}</td>
+                  {isDoctorView ? <td className="px-4 sm:px-8 py-4 sm:py-5 text-slate-700">{item.patientName || "N/A"}</td> : null}
                   <td className="px-4 sm:px-8 py-4 sm:py-5"><Badge type={item.status}>{item.result}</Badge></td>
-                  <td className="px-4 sm:px-8 py-4 sm:py-5 text-slate-400 italic hidden sm:table-cell">Image not retained (Privacy)</td>
+                  <td className="px-4 sm:px-8 py-4 sm:py-5 text-slate-400 italic hidden sm:table-cell">{isDoctorView ? (item.scanId || item.id || "No scan ID") : "Image not retained (Privacy)"}</td>
                 </tr>
               ))}
             </tbody>
           </table>
           </div>
-        ) : <div className="p-8 text-center text-slate-500">No history found.</div>}
+        ) : <div className="p-8 text-center text-slate-500">{isDoctorView ? "No scans found yet." : "No history found."}</div>}
       </div>
     </div>
   );
 };
 
 // DOCTOR VIEWS
-const MetricCard = ({ title, value }) => (
-  <div className="bg-white p-6 rounded-xl shadow border">
-    <p className="text-sm text-slate-500">{title}</p>
-    <p className="text-3xl font-bold">{value}</p>
-  </div>
-);
-
 const KPICard = ({ title, value, icon: Icon, color }) => (
   <div className="bg-white rounded-xl shadow-md p-6">
     <div className="flex items-center justify-between mb-4">

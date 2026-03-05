@@ -1,8 +1,13 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f8fafc;
+  --foreground: #0f172a;
+}
+
+.dark {
+  --background: #020617;
+  --foreground: #e2e8f0;
 }
 
 @theme inline {
@@ -10,23 +15,25 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  /* Atlassian Blue palette */
+  --color-blue-50: #E9F2FF;
+  --color-blue-100: #CCE0FF;
+  --color-blue-200: #B3D4FF;
+  --color-blue-300: #4C9AFF;
+  --color-blue-400: #2684FF;
+  --color-blue-500: #0065FF;
+  --color-blue-600: #0052CC;
+  --color-blue-700: #0747A6;
+  --color-blue-800: #003884;
+  --color-blue-900: #091E42;
+  --color-blue-950: #04112B;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
-}
-
-* {
-  transition: all 0.2s ease-in-out;
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
 }
 
 .fade-in {
@@ -47,15 +54,15 @@ body {
 input,
 select,
 textarea {
-  transition: all 0.15s ease-in-out;
+  transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
 }
 
 input:focus,
 select:focus,
 textarea:focus {
   outline: none;
-  border-color: #2563eb;
-  box-shadow: 0 0 0 2px #2563eb;
+  border-color: #0052CC;
+  box-shadow: 0 0 0 2px rgba(0, 82, 204, 0.25);
 }
 
 tbody tr:nth-child(even) {
@@ -64,6 +71,55 @@ tbody tr:nth-child(even) {
 
 tbody tr:hover {
   background-color: #f1f5f9;
+}
+
+html.dark .bg-white {
+  background-color: #0f172a !important;
+}
+
+html.dark .bg-white\/95 {
+  background-color: rgba(15, 23, 42, 0.95) !important;
+}
+
+html.dark .bg-white\/80 {
+  background-color: rgba(15, 23, 42, 0.8) !important;
+}
+
+html.dark .bg-slate-50 {
+  background-color: #020617 !important;
+}
+
+html.dark .bg-slate-100 {
+  background-color: #1e293b !important;
+}
+
+html.dark .text-slate-900 {
+  color: #e2e8f0 !important;
+}
+
+html.dark .text-slate-800,
+html.dark .text-slate-700,
+html.dark .text-slate-600 {
+  color: #cbd5e1 !important;
+}
+
+html.dark .text-slate-500,
+html.dark .text-slate-400 {
+  color: #94a3b8 !important;
+}
+
+html.dark .border-slate-200,
+html.dark .border-slate-100,
+html.dark .border-slate-300 {
+  border-color: #334155 !important;
+}
+
+html.dark tbody tr:nth-child(even) {
+  background-color: #111827;
+}
+
+html.dark tbody tr:hover {
+  background-color: #1f2937;
 }
 
 @media (prefers-reduced-motion: reduce) {

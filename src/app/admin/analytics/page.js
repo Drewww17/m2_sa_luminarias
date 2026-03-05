@@ -130,7 +130,7 @@ export default function AdminAnalyticsPage() {
             <div className="h-72">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} label>
+                  <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label>
                     <Cell fill="#ef4444" />
                     <Cell fill="#10b981" />
                   </Pie>
@@ -142,7 +142,7 @@ export default function AdminAnalyticsPage() {
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl shadow-lg hover:shadow-xl transition-shadow duration-300 p-6 grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="bg-white rounded-2xl shadow-lg hover:shadow-xl transition-shadow duration-300 p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
           <p className="text-slate-700"><span className="font-bold text-slate-900">Ulcer detection rate:</span> {metrics.ulcerRate.toFixed(1)}%</p>
           <p className="text-slate-700"><span className="font-bold text-slate-900">Model Agreement Score:</span> {metrics.doctorAgreementRate.toFixed(1)}%</p>
           <p className="text-slate-700"><span className="font-bold text-slate-900">False positive rate:</span> {metrics.falsePositiveRate.toFixed(1)}%</p>

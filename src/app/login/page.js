@@ -58,9 +58,18 @@ export default function LoginPage() {
   };
 
   return (
-    <main className="min-h-screen bg-slate-100 flex items-center justify-center p-6">
-      <section className="w-full max-w-md bg-white rounded-2xl shadow-md p-8">
-        <h1 className="text-2xl font-bold text-slate-900">Sign in to DFU-Detect</h1>
+    <main className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+      <section className="w-full max-w-md bg-white rounded-xl shadow-md p-8">
+        <div className="flex items-center gap-3 mb-6">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo.png?v=2" alt="DFU-Detect" width={40} height={40} style={{ width: 40, height: 40, objectFit: 'contain' }} />
+          <div>
+            <p className="text-lg font-semibold text-slate-900">DFU-Detect</p>
+            <p className="text-xs text-slate-500">Clinical AI Platform</p>
+          </div>
+        </div>
+
+        <h1 className="text-2xl font-semibold text-slate-900">Sign in to DFU-Detect</h1>
 
         <form onSubmit={handleSubmit} className="mt-6 space-y-4">
           <label className="flex flex-col gap-1 text-slate-700">
@@ -101,6 +110,11 @@ export default function LoginPage() {
             Forgot Password?
           </button>
         </form>
+
+        <div className="mt-8 border-t border-slate-200 pt-4 text-center text-xs text-slate-500">
+          <p>© 2026 Philip Andrew</p>
+          <p>DFU-Detect — AI Assisted Diabetic Foot Ulcer Detection System</p>
+        </div>
       </section>
     </main>
   );

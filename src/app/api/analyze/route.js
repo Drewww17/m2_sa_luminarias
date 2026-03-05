@@ -82,10 +82,21 @@ export async function POST(request) {
           model: model.id,
           weight: model.weight,
           prediction: data.predictions?.length ? "Ulcer" : "Healthy",
-          confidence: Number((maxConfidence * 100).toFixed(2))
+          confidence: Number((maxConfidence * 100).toFixed(2)),
+          predictions: (data.predictions || []).map((prediction) => ({
+            x: prediction.x,
+            y: prediction.y,
+            width: prediction.width,
+            height: prediction.height,
+            class: prediction.class,
+            confidence: Number(((prediction.confidence || 0) * 100).toFixed(2)),
+          })),
+          imageMeta: data.image
         };
       })
     );
+
+    const topPredictionModel = [...results].sort((a, b) => b.confidence - a.confidence)[0] || null;
 
     // Calculate Agreement %
     const ulcerVotes = results.filter(r => r.prediction === "Ulcer").length;
@@ -147,7 +158,9 @@ export async function POST(request) {
       reliabilityScore: reliabilityScore.toFixed(2),
       severity,
       riskScore,
-      recommendation
+      recommendation,
+      predictions: topPredictionModel?.predictions || [],
+      imageMeta: topPredictionModel?.imageMeta || null,
     });
 
   } catch (error) {

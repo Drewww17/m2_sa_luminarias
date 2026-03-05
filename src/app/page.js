@@ -5,8 +5,22 @@ import { useRouter } from "next/navigation";
 import { 
   UploadCloud, Activity, FileText, User, Search, AlertCircle, 
   CheckCircle, ChevronRight, LogIn, PlusCircle, BookOpen, 
-  Settings, LayoutDashboard, FileBarChart, Filter, ArrowRight 
+  Settings, LayoutDashboard, FileBarChart, Filter, ArrowRight,
+  Menu, X
 } from 'lucide-react';
+// Reusable logo component
+/* eslint-disable @next/next/no-img-element */
+const DfuLogo = ({ size = 40, className = '' }) => (
+  <img 
+    src="/logo.png?v=2" 
+    alt="DFU-Detect" 
+    width={size} 
+    height={size} 
+    className={`${className}`}
+    style={{ width: size, height: size, objectFit: 'contain' }}
+  />
+);
+/* eslint-enable @next/next/no-img-element */
 import Webcam from "react-webcam";
 import { 
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, 
@@ -38,8 +52,8 @@ import { exportPatientCsv } from "@/utils/csvExporter";
 import { MODEL_VERSION, SYSTEM_VERSION } from "@/constants/systemInfo";
 
 const loadClinicalPdfGenerator = async () => {
-  const module = await import("@/utils/pdfGenerator");
-  return module.generateClinicalPdf;
+  const pdfGeneratorModule = await import("@/utils/pdfGenerator");
+  return pdfGeneratorModule.generateClinicalPdf;
 };
 
 // --- MAIN APP COMPONENT ---
@@ -48,18 +62,31 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [userData, setUserData] = useState(null);
   const [route, setRoute] = useState('landing');
+  const [isDarkMode, setIsDarkMode] = useState(false);
   
   // App Data State
   const [scanHistory, setScanHistory] = useState([]);
   const [allPatients, setAllPatients] = useState([]);
   const [allScans, setAllScans] = useState([]);
-  const [doctorScansLoading, setDoctorScansLoading] = useState(false);
+  const [doctorScansLoading, setDoctorScansLoading] = useState(true);
   const [doctorScansError, setDoctorScansError] = useState("");
   const [selectedPatientId, setSelectedPatientId] = useState(null);
 
  
   const [scanImage, setScanImage] = useState(null);
   const [analysisResult, setAnalysisResult] = useState(null);
+
+  useEffect(() => {
+    const savedTheme = localStorage.getItem("dfu-theme");
+    if (savedTheme === "dark") {
+      setIsDarkMode(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", isDarkMode);
+    localStorage.setItem("dfu-theme", isDarkMode ? "dark" : "light");
+  }, [isDarkMode]);
 
   // 1. AUTHENTICATION
   useEffect(() => {
@@ -84,6 +111,7 @@ export default function App() {
       }
     });
     return () => unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // --- 2. DATA FETCHING (Real-time) ---
@@ -108,8 +136,6 @@ export default function App() {
 
     // DOCTOR: Fetch all patients and scans
     if (userData.role === 'doctor') {
-      setDoctorScansLoading(true);
-      setDoctorScansError("");
       const scansQuery = collection(db, 'scans');
       const unsubScans = onSnapshot(
         scansQuery,
@@ -117,6 +143,7 @@ export default function App() {
           const scans = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
           scans.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
           setAllScans(scans);
+          setDoctorScansError("");
           setDoctorScansLoading(false);
         },
         (error) => {
@@ -238,64 +265,85 @@ export default function App() {
     }
   };
 
+  const isPortalUser = userData?.role === "patient" || userData?.role === "doctor";
+
+  const routeContent = (
+    <>
+      {route === 'landing' && <LandingPage navigate={navigate} />}
+
+      {route === 'patient-dashboard' && <PatientDashboard navigate={navigate} history={scanHistory} userData={userData} />}
+
+      {route === 'new-scan' && (
+        <NewScanPage
+          navigate={navigate}
+          setAnalysisResult={setAnalysisResult}
+          setScanImage={setScanImage}
+          userData={userData}
+        />
+      )}
+
+      {route === 'scan-results-patient' && (
+        <ScanResultsPatient
+          navigate={navigate}
+          result={analysisResult}
+          image={scanImage}
+          history={scanHistory}
+          userData={userData}
+          onSave={() => handleSaveScan(analysisResult)}
+        />
+      )}
+
+      {route === 'my-history' && <MyHistoryPage navigate={navigate} history={scanHistory} userData={userData} />}
+      {route === 'education' && <EducationHub navigate={navigate} />}
+
+      {(route === 'doctor-dashboard' || route === 'clinical-overview' || route === 'patient-cumulative') && (
+        <DoctorDashboard navigate={navigate} allScans={allScans} />
+      )}
+
+      {route === 'patient-records' && (
+        <PatientRecords
+          navigate={navigate}
+          allScans={allScans}
+          userData={userData}
+          loading={doctorScansLoading}
+          error={doctorScansError}
+          onSelectPatient={(id) => {
+            setSelectedPatientId(id);
+            navigate('patient-detail');
+          }}
+        />
+      )}
+
+      {route === 'patient-detail' && <PatientDetail navigate={navigate} allScans={allScans} patientId={selectedPatientId} />}
+      {route === 'settings' && <SettingsPage userData={userData} onLogout={handleLogout} navigate={navigate} isDarkMode={isDarkMode} onToggleDarkMode={() => setIsDarkMode((prev) => !prev)} />}
+      {(route === 'test-model' || route === 'view-models') && <TestModel navigate={navigate} />}
+      {route === 'scan-results-doctor' && (
+        <ScanResultsDoctor
+          navigate={navigate}
+          image={scanImage}
+          result={analysisResult}
+          onSave={handleSaveScan}
+          userData={userData}
+        />
+      )}
+    </>
+  );
+
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-800 flex flex-col fade-in">
-      <Navbar route={route} userData={userData} navigate={navigate} onLogout={handleLogout} />
-      
-      <main className="flex-grow flex flex-col items-center p-4 sm:p-8">
-        <div className="w-full max-w-6xl">
-          {/* PUBLIC ROUTES */}
-          {route === 'landing' && <LandingPage navigate={navigate} />}
-          
-          {/* PATIENT PORTAL */}
-          {route === 'patient-dashboard' && <PatientDashboard navigate={navigate} history={scanHistory} userData={userData} />}
-          
-          {route === 'new-scan' && (
-            <NewScanPage 
-              navigate={navigate} 
-              setAnalysisResult={setAnalysisResult} 
-              setScanImage={setScanImage}
-              userData={userData}
-            />
-          )}
-          
-          {route === 'scan-results-patient' && (
-            <ScanResultsPatient 
-              navigate={navigate} 
-              result={analysisResult} 
-              image={scanImage}
-              history={scanHistory}
-              userData={userData}
-              onSave={() => handleSaveScan(analysisResult)} 
-            />
-          )}
-          
-          {route === 'my-history' && <MyHistoryPage navigate={navigate} history={scanHistory} userData={userData} />}
-          {route === 'education' && <EducationHub navigate={navigate} />}
-          
-          {/* DOCTOR PORTAL */}
-          {route === 'doctor-dashboard' && <DoctorDashboard navigate={navigate} allScans={allScans} />}
-          {route === 'patient-records' && (
-            <PatientRecords
-              navigate={navigate}
-              allScans={allScans}
-              userData={userData}
-              loading={doctorScansLoading}
-              error={doctorScansError}
-              onSelectPatient={(id) => {
-                setSelectedPatientId(id);
-                navigate('patient-detail');
-              }}
-            />
-          )}
-          {route === 'patient-detail' && <PatientDetail navigate={navigate} allScans={allScans} patientId={selectedPatientId} />}
-          {route === 'patient-cumulative' && <PatientCumulative navigate={navigate} allScans={allScans} />}
-          {route === 'test-model' && <TestModel navigate={navigate} />}
-          {route === 'scan-results-doctor' && <ScanResultsDoctor navigate={navigate} image={scanImage} result={analysisResult} onSave={handleSaveScan} userData={userData} />}
-        </div>
-      </main>
+      {!isPortalUser ? <Navbar route={route} userData={userData} navigate={navigate} onLogout={handleLogout} /> : null}
 
-      <Footer />
+      {isPortalUser ? (
+        <HealthcareShell route={route} userData={userData} navigate={navigate} onLogout={handleLogout}>
+          {routeContent}
+        </HealthcareShell>
+      ) : (
+        <main className="grow flex flex-col items-center p-4 sm:p-8">
+          <div className="w-full max-w-6xl">{routeContent}</div>
+        </main>
+      )}
+
+      <Footer isPortalUser={isPortalUser} />
     </div>
   );
 }
@@ -304,39 +352,19 @@ export default function App() {
 
 const Navbar = ({ route, userData, navigate, onLogout }) => {
   const role = userData?.role || 'guest';
-  const navLinks = {
-    guest: [
-      { id: 'landing', label: 'Home' },
-      { id: 'login', label: 'New Scan' },
-      { id: 'education', label: 'More Info' },
-    ],
-    patient: [
-      { id: 'patient-dashboard', label: 'Home' },
-      { id: 'new-scan', label: 'New Scan' },
-      { id: 'my-history', label: 'My History' },
-      { id: 'education', label: 'More Info' },
-    ],
-    doctor: [
-      { id: 'doctor-dashboard', label: 'Dashboard' },
-      { id: 'new-scan', label: 'Live Scan' },
-      { id: 'patient-records', label: 'Patients' },
-      { id: 'patient-cumulative', label: 'Analytics' },
-      { id: 'test-model', label: 'Test Model' },
-    ],
-    admin: [
-      { id: 'admin-dashboard', label: 'Doctor Dashboard' },
-    ]
-  };
-
-  const logoTarget = role === 'guest' ? 'landing' : role === 'admin' ? 'admin-dashboard' : `${role}-dashboard`;
-  const activeLinks = navLinks[role] || navLinks.guest;
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const activeLinks = [
+    { id: 'landing', label: 'Home' },
+    { id: 'login', label: 'Sign In' },
+    { id: 'education', label: 'Education Hub' },
+  ];
 
   return (
     <nav className="backdrop-blur-md bg-white/80 border-b border-slate-200 sticky top-0 z-10 shadow-md">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between h-20">
-          <div className="flex items-center cursor-pointer gap-3" onClick={() => navigate(logoTarget)}>
-            <img src="/logo.png" alt="DFU-Detect Logo" className="h-10 w-auto" />
+          <div className="flex items-center cursor-pointer gap-3" onClick={() => navigate('landing')}>
+            <DfuLogo size={40} />
             <span className="font-extrabold text-xl text-slate-900 tracking-tight hidden sm:block">DFU-Detect</span>
           </div>
           
@@ -346,18 +374,21 @@ const Navbar = ({ route, userData, navigate, onLogout }) => {
                 type="button"
                 key={link.label}
                 onClick={() => navigate(link.id)}
-                className={`text-sm font-bold rounded-lg px-2 py-1 transition-all duration-200 ${route === link.id ? 'text-blue-600 bg-blue-50' : 'text-slate-500 hover:text-blue-600 hover:bg-slate-50'}`}
+                className={`text-sm font-bold rounded-lg px-2 py-1 transition-colors ${route === link.id ? 'text-blue-600 bg-blue-50' : 'text-slate-500 hover:text-blue-600 hover:bg-slate-50'}`}
               >
                 {link.label}
               </button>
             ))}
           </div>
 
-          <div className="flex items-center">
+          <div className="flex items-center gap-3">
+            <button type="button" onClick={() => setMobileMenuOpen(!mobileMenuOpen)} className="md:hidden p-2 rounded-lg hover:bg-slate-100 text-slate-600">
+              {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+            </button>
             {role === 'guest' ? (
               <div className="flex items-center gap-4">
-                <button type="button" onClick={() => navigate('login')} className="text-sm font-bold text-slate-600 hover:text-blue-600 transition-all duration-200">Login</button>
-                <button type="button" onClick={() => navigate('signup')} className="text-sm font-bold bg-blue-600 text-white px-5 py-2.5 rounded-xl hover:bg-blue-700 active:scale-95 shadow-lg shadow-blue-600/20 transition-all duration-150">Sign Up</button>
+                <button type="button" onClick={() => navigate('login')} className="text-sm font-bold text-slate-600 hover:text-blue-600 transition-colors">Login</button>
+                <button type="button" onClick={() => navigate('signup')} className="text-sm font-bold bg-blue-600 text-white px-5 py-2.5 rounded-xl hover:bg-blue-700 active:scale-95 shadow-lg shadow-blue-600/20">Sign Up</button>
               </div>
             ) : (
               <div className="flex items-center gap-3">
@@ -365,15 +396,154 @@ const Navbar = ({ route, userData, navigate, onLogout }) => {
                   <p className="text-sm font-bold text-slate-800">{userData.firstName} {userData.lastName}</p>
                   <p className="text-xs text-slate-500 capitalize">{role === 'doctor' ? 'Medical Pro' : 'Patient'}</p>
                 </div>
-                <div className="h-10 w-10 rounded-full bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-700 cursor-pointer hover:bg-blue-100 transition-colors" onClick={onLogout}>
+                <div className="h-10 w-10 rounded-full bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 cursor-pointer hover:bg-blue-100 transition-colors" onClick={onLogout}>
                   <User className="h-5 w-5" />
                 </div>
               </div>
             )}
           </div>
         </div>
+
+        {/* Mobile nav menu */}
+        {mobileMenuOpen && (
+          <div className="md:hidden border-t border-slate-200 py-2 space-y-1">
+            {activeLinks.map(link => (
+              <button
+                type="button"
+                key={link.label}
+                onClick={() => { navigate(link.id); setMobileMenuOpen(false); }}
+                className={`block w-full text-left text-sm font-medium rounded-lg px-3 py-2 transition-colors ${route === link.id ? 'text-blue-600 bg-blue-50' : 'text-slate-600 hover:bg-slate-50'}`}
+              >
+                {link.label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </nav>
+  );
+};
+
+const HealthcareShell = ({ route, userData, navigate, onLogout, children }) => {
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const baseItems = [
+    { id: userData?.role === "doctor" ? "doctor-dashboard" : "patient-dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { id: "new-scan", label: "New Scan", icon: UploadCloud },
+    { id: "my-history", label: "Scan History", icon: FileText },
+    { id: "education", label: "Education Hub", icon: BookOpen },
+  ];
+
+  const doctorItems = [
+    { id: "patient-records", label: "Patient Records", icon: User },
+    { id: "clinical-overview", label: "Clinical Overview", icon: Activity },
+    { id: "view-models", label: "View Models", icon: FileBarChart },
+  ];
+
+  const navItems = userData?.role === "doctor" ? [...baseItems.slice(0, 2), ...doctorItems, ...baseItems.slice(2)] : baseItems;
+
+  const handleNav = (id) => {
+    navigate(id);
+    setSidebarOpen(false);
+  };
+
+  return (
+    <div className="flex flex-1 bg-slate-50">
+      {/* Mobile backdrop */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/40 lg:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      {/* Sidebar */}
+      <aside className={`fixed inset-y-0 left-0 z-40 w-[85vw] max-w-72 bg-white border-r border-slate-200 p-4 flex flex-col transform transition-transform duration-200 ease-in-out lg:w-72 lg:max-w-none lg:translate-x-0 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`}>
+        <div className="flex items-center justify-between px-2 py-4 border-b border-slate-200">
+          <div className="flex items-center gap-3">
+            <DfuLogo size={40} className="rounded-lg" />
+            <div>
+              <p className="font-semibold text-slate-900">DFU-Detect</p>
+              <p className="text-xs text-slate-500">AI Clinical Platform</p>
+            </div>
+          </div>
+          <button type="button" onClick={() => setSidebarOpen(false)} className="lg:hidden p-1 rounded-md hover:bg-slate-100 text-slate-500">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <nav className="mt-4 space-y-1 flex-1 overflow-y-auto">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            const isActive = route === item.id || (item.id === "clinical-overview" && route === "doctor-dashboard");
+            return (
+              <button
+                type="button"
+                key={item.id}
+                onClick={() => handleNav(item.id)}
+                className={`w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${isActive ? "bg-blue-50 text-blue-600" : "text-slate-600 hover:bg-slate-100"}`}
+              >
+                <Icon className="h-4 w-4" />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="border-t border-slate-200 pt-3 space-y-1">
+          <button type="button" onClick={() => handleNav('settings')} className="w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-100">
+            <Settings className="h-4 w-4" />
+            <span>Settings</span>
+          </button>
+          <button
+            type="button"
+            onClick={onLogout}
+            className="w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-100"
+          >
+            <LogIn className="h-4 w-4 rotate-180" />
+            <span>Logout</span>
+          </button>
+        </div>
+      </aside>
+
+      {/* Main content */}
+      <div className="flex-1 min-h-screen lg:ml-72">
+        <header className="sticky top-0 z-10 bg-white/95 backdrop-blur border-b border-slate-200 px-4 sm:px-6 py-3">
+          <div className="flex items-center justify-between gap-3 sm:gap-4">
+            <div className="flex items-center gap-3">
+              <button type="button" onClick={() => setSidebarOpen(true)} className="lg:hidden p-2 -ml-2 rounded-lg hover:bg-slate-100 text-slate-600">
+                <Menu className="h-5 w-5" />
+              </button>
+              <h1 className="text-lg font-semibold text-slate-900">DFU-Detect</h1>
+            </div>
+            <div className="hidden sm:block flex-1 max-w-xl relative">
+              <Search className="h-4 w-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Search patients"
+                className="w-full rounded-xl border border-slate-200 pl-9 pr-3 py-2 text-sm focus:ring-2 focus:ring-blue-600 focus:border-blue-600"
+              />
+            </div>
+            <div className="flex items-center gap-2 sm:gap-3">
+              <button type="button" onClick={() => handleNav('settings')} className="h-9 w-9 sm:h-10 sm:w-10 rounded-full bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-700 hover:bg-blue-100 transition-colors">
+                <User className="h-5 w-5" />
+              </button>
+            </div>
+          </div>
+
+          <div className="sm:hidden mt-3 relative">
+            <Search className="h-4 w-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              placeholder="Search patients"
+              className="w-full rounded-xl border border-slate-200 pl-9 pr-3 py-2 text-sm focus:ring-2 focus:ring-blue-600 focus:border-blue-600"
+            />
+          </div>
+        </header>
+
+        <main className="p-4 sm:p-6">{children}</main>
+      </div>
+    </div>
   );
 };
 
@@ -384,18 +554,18 @@ const LandingPage = ({ navigate }) => (
         <AlertCircle className="h-4 w-4" /> 
         <span>AI-Powered Medical Assistance</span>
       </div>
-      <h1 className="text-5xl md:text-7xl font-extrabold text-slate-900 tracking-tight leading-tight">
+      <h1 className="text-3xl sm:text-5xl md:text-7xl font-extrabold text-slate-900 tracking-tight leading-tight">
         Early Detection of <br className="hidden md:block" />
         <span className="text-blue-600 relative inline-block mt-2">Diabetic Foot Ulcers</span>
       </h1>
-      <p className="text-xl text-slate-600 max-w-2xl mx-auto leading-relaxed">
+      <p className="text-base sm:text-xl text-slate-600 max-w-2xl mx-auto leading-relaxed px-4 sm:px-0">
         Upload a photo of the affected area to receive an instant analysis powered by advanced computer vision. Early detection saves lives.
       </p>
       <div className="flex flex-col sm:flex-row justify-center gap-4 pt-6 w-full sm:w-auto">
-        <button type="button" onClick={() => navigate('signup')} className="bg-blue-600 text-white px-8 py-4 rounded-xl font-bold hover:bg-blue-700 active:scale-95 transition-all duration-150 flex items-center justify-center gap-2 shadow-xl shadow-blue-600/30 text-lg w-full sm:w-auto">
+        <button type="button" onClick={() => navigate('signup')} className="bg-blue-600 text-white px-8 py-4 rounded-xl font-bold hover:bg-blue-700 active:scale-95 flex items-center justify-center gap-2 shadow-xl shadow-blue-600/30 text-lg w-full sm:w-auto">
           <UploadCloud className="h-5 w-5" /> Start Scan
         </button>
-        <button type="button" onClick={() => navigate('education')} className="bg-white text-slate-700 border-2 border-slate-200 px-8 py-4 rounded-xl font-bold hover:bg-slate-50 hover:border-slate-300 active:scale-95 transition-all duration-150 text-lg w-full sm:w-auto">
+        <button type="button" onClick={() => navigate('education')} className="bg-white text-slate-700 border-2 border-slate-200 px-8 py-4 rounded-xl font-bold hover:bg-slate-50 hover:border-slate-300 active:scale-95 text-lg w-full sm:w-auto">
           Learn More
         </button>
       </div>
@@ -477,7 +647,7 @@ const LoginPage = ({ onLogin, navigate }) => {
         <button onClick={() => handleSimulatedLogin('doctor')} className="w-full bg-slate-800 text-white rounded-xl py-3.5 font-bold">Sign In as Doctor</button>
       </div>
       <p className="text-center text-sm text-slate-500 mt-8 font-medium">
-        Don't have an account? <span className="text-blue-600 font-bold cursor-pointer hover:underline" onClick={() => navigate('signup')}>Register now</span>
+        Don&apos;t have an account? <span className="text-blue-600 font-bold cursor-pointer hover:underline" onClick={() => navigate('signup')}>Register now</span>
       </p>
     </div>
   );
@@ -486,15 +656,15 @@ const LoginPage = ({ onLogin, navigate }) => {
 // PATIENT VIEWS
 
 const PatientDashboard = ({ navigate, history, userData }) => (
-  <div className="space-y-10 w-full max-w-5xl mx-auto py-8">
+  <div className="space-y-8 sm:space-y-10 w-full max-w-5xl mx-auto py-4 sm:py-8 px-1 sm:px-0">
     <div className="flex flex-col md:flex-row justify-between items-end gap-4 border-b border-slate-200 pb-6">
       <div>
-        <h1 className="text-3xl font-extrabold text-slate-900">Hello, {userData?.firstName || 'User'}</h1>
+        <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900">Hello, {userData?.firstName || 'User'}</h1>
         <p className="text-slate-500 font-medium mt-1">Welcome to your health monitoring dashboard.</p>
       </div>
     </div>
 
-    <div className="bg-white border border-slate-100 rounded-3xl p-10 shadow-sm text-center flex flex-col items-center justify-center space-y-6 hover:shadow-md transition-shadow">
+    <div className="bg-white border border-slate-100 rounded-3xl p-6 sm:p-10 shadow-sm text-center flex flex-col items-center justify-center space-y-6 hover:shadow-md transition-shadow">
       <div className="h-20 w-20 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mb-2 border border-blue-100">
         <PlusCircle className="h-10 w-10" />
       </div>
@@ -508,19 +678,21 @@ const PatientDashboard = ({ navigate, history, userData }) => (
       <h3 className="font-bold text-xl text-slate-900 mb-6">Recent History</h3>
       <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
         {history.length > 0 ? (
+          <div className="overflow-x-auto">
           <table className="w-full text-sm text-left">
             <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-100 text-xs uppercase tracking-wider">
-              <tr><th className="px-8 py-4">Date</th><th className="px-8 py-4">Result</th></tr>
+              <tr><th className="px-4 sm:px-8 py-4">Date</th><th className="px-4 sm:px-8 py-4">Result</th></tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {history.slice(0, 3).map((item) => (
                 <tr key={item.id} className="hover:bg-blue-50/30">
-                  <td className="px-8 py-5 text-slate-700 font-bold">{item.dateString}</td>
-                  <td className="px-8 py-5"><Badge type={item.status}>{item.result}</Badge></td>
+                  <td className="px-4 sm:px-8 py-4 sm:py-5 text-slate-700 font-bold">{item.dateString}</td>
+                  <td className="px-4 sm:px-8 py-4 sm:py-5"><Badge type={item.status}>{item.result}</Badge></td>
                 </tr>
               ))}
             </tbody>
           </table>
+          </div>
         ) : (
           <div className="p-8 text-center text-slate-500">No scans recorded yet.</div>
         )}
@@ -613,15 +785,15 @@ const NewScanPage = ({ navigate, setAnalysisResult, setScanImage, userData }) =>
   ];
 
   return (
-    <div className="max-w-3xl mx-auto py-8 space-y-8">
-      <h1 className="text-2xl font-bold text-slate-900">New Foot Scan</h1>
+    <div className="max-w-3xl mx-auto py-4 sm:py-8 space-y-6 sm:space-y-8 px-1 sm:px-0">
+      <h1 className="text-xl sm:text-2xl font-bold text-slate-900">New Foot Scan</h1>
       
       {/* Model Selection */}
       <div className="bg-white p-6 rounded-2xl border shadow-lg hover:shadow-xl transition-shadow duration-300">
         <h3 className="font-bold mb-4">Model Selection (AI Models)</h3>
         <div className="grid grid-cols-1 gap-3">
           {availableModels.map(model => (
-            <label key={model.id} className="flex items-center gap-3 p-3 rounded-lg border hover:bg-slate-50 transition-all duration-200 cursor-pointer">
+            <label key={model.id} className="flex items-center gap-3 p-3 rounded-lg border hover:bg-slate-50 transition-colors cursor-pointer">
               <input
                 type="checkbox"
                 checked={selectedModels.includes(model.id)}
@@ -643,7 +815,7 @@ const NewScanPage = ({ navigate, setAnalysisResult, setScanImage, userData }) =>
       <button
         type="button"
         onClick={() => setUseWebcam(!useWebcam)}
-        className="mb-4 bg-slate-800 text-white px-4 py-2 rounded-lg hover:bg-slate-700 active:scale-95 transition-all duration-150"
+        className="mb-4 bg-slate-800 text-white px-4 py-2 rounded-lg hover:bg-slate-700 active:scale-95"
       >
         {useWebcam ? "Switch to Upload" : "Use Webcam"}
       </button>
@@ -664,7 +836,7 @@ const NewScanPage = ({ navigate, setAnalysisResult, setScanImage, userData }) =>
               }
             }}
             disabled={analyzing || selectedModels.length === 0}
-            className="bg-blue-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-blue-700 active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-150"
+            className="bg-blue-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-blue-700 active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {analyzing ? 'Processing...' : 'Capture & Analyze'}
           </button>
@@ -672,13 +844,14 @@ const NewScanPage = ({ navigate, setAnalysisResult, setScanImage, userData }) =>
       ) : (
         <>
           <div 
-            className="bg-white border-2 border-dashed border-slate-300 rounded-3xl p-16 flex flex-col items-center justify-center text-center hover:bg-slate-50 cursor-pointer"
+            className="bg-white border-2 border-dashed border-slate-300 rounded-3xl p-8 sm:p-16 flex flex-col items-center justify-center text-center hover:bg-slate-50 cursor-pointer"
             onClick={() => fileInputRef.current.click()}
           >
             <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={(e) => setSelectedFile(e.target.files[0])} />
             
             {selectedFile ? (
               <div>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={URL.createObjectURL(selectedFile)} alt="Preview" className="h-48 object-contain rounded-lg mb-4" />
                 <p className="font-bold text-slate-800">{selectedFile.name}</p>
               </div>
@@ -694,7 +867,7 @@ const NewScanPage = ({ navigate, setAnalysisResult, setScanImage, userData }) =>
             <button 
               onClick={handleAnalyze} 
               disabled={!selectedFile || analyzing || selectedModels.length === 0}
-              className="bg-blue-600 text-white px-8 py-3 rounded-xl font-bold hover:bg-blue-700 active:scale-95 shadow-lg disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-150"
+              className="bg-blue-600 text-white px-8 py-3 rounded-xl font-bold hover:bg-blue-700 active:scale-95 shadow-lg disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {analyzing ? 'Processing...' : 'Analyze Image'}
             </button>
@@ -758,14 +931,58 @@ const RiskBar = ({ score }) => {
   return (
     <div className="w-full bg-slate-200 rounded-full h-4">
       <div
-        className={`${color} h-4 rounded-full transition-all`}
+        className={`${color} h-4 rounded-full`}
         style={{ width: `${score}%` }}
       />
     </div>
   );
 };
 
+const BoundingBoxVisualization = ({ image, predictions = [], imageMeta }) => {
+  const width = Number(imageMeta?.width) || 1;
+  const height = Number(imageMeta?.height) || 1;
+
+  return (
+    <div className="bg-white rounded-xl shadow-md p-6">
+      <h3 className="text-lg font-semibold text-slate-900 mb-4">Bounding Box Visualization</h3>
+      <div className="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-100">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        {image ? <img src={image} alt="Scan" className="w-full h-full object-contain" /> : <div className="p-10 text-center text-slate-500">Image expired</div>}
+
+        {image && predictions.map((prediction, index) => {
+          const boxLeft = ((Number(prediction.x || 0) - Number(prediction.width || 0) / 2) / width) * 100;
+          const boxTop = ((Number(prediction.y || 0) - Number(prediction.height || 0) / 2) / height) * 100;
+          const boxWidth = (Number(prediction.width || 0) / width) * 100;
+          const boxHeight = (Number(prediction.height || 0) / height) * 100;
+          const label = prediction.class || "Finding";
+          const isUlcer = String(label).toLowerCase().includes("ulcer");
+
+          return (
+            <div
+              key={`${prediction.class}-${index}`}
+              className={`absolute border-2 ${isUlcer ? "border-red-500" : "border-emerald-500"}`}
+              style={{
+                left: `${Math.max(0, boxLeft)}%`,
+                top: `${Math.max(0, boxTop)}%`,
+                width: `${Math.max(0, boxWidth)}%`,
+                height: `${Math.max(0, boxHeight)}%`,
+              }}
+            >
+              <span className={`absolute -top-6 left-0 text-xs px-2 py-1 rounded-md text-white ${isUlcer ? "bg-red-500" : "bg-emerald-500"}`}>
+                {label} — {Number(prediction.confidence || 0).toFixed(0)}%
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      {predictions.length === 0 ? <p className="text-sm text-slate-500 mt-3">No localized lesion boxes were returned for this scan.</p> : null}
+    </div>
+  );
+};
+
 const ScanResultsPatient = ({ navigate, result, image, history, onSave, userData }) => {
+  if (!result) return null;
+
   const lastScan = history[0];
   let trend = null;
 
@@ -804,109 +1021,41 @@ const ScanResultsPatient = ({ navigate, result, image, history, onSave, userData
     }
   };
 
+  const diagnosis = result.consensus || result.diagnosis || (result.is_ulcer ? "Ulcer Detected" : "Healthy");
+  const confidence = Number(result.confidence || 0);
+  const riskLevel = result.severity || "Low";
+  const riskClass = riskLevel === "High" ? "text-red-500" : riskLevel === "Moderate" ? "text-amber-500" : "text-emerald-500";
+
   return (
-    <div className="max-w-6xl mx-auto py-8">
-      <div className="grid lg:grid-cols-2 gap-10 items-start">
-        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-           {image ? <img src={image} alt="Scan" className="w-full h-full object-cover rounded-xl" /> : <div className="text-center p-10">Image Expired</div>}
+    <div className="max-w-6xl mx-auto py-2 grid grid-cols-1 lg:grid-cols-5 gap-6">
+      <div className="lg:col-span-3">
+        <BoundingBoxVisualization image={image} predictions={result.predictions || []} imageMeta={result.imageMeta} />
+      </div>
+
+      <div id="clinical-report" className="lg:col-span-2 space-y-4">
+        <div className="bg-white rounded-xl shadow-md p-6 space-y-3">
+          <h2 className="text-xl font-semibold text-slate-900">Diagnosis Card</h2>
+          <p className="text-sm text-slate-500">Diagnosis</p>
+          <p className={`text-lg font-semibold ${diagnosis.toLowerCase().includes("ulcer") ? "text-red-500" : "text-emerald-500"}`}>{diagnosis}</p>
+          <p className="text-sm text-slate-500">Confidence Score</p>
+          <p className="text-2xl font-semibold text-slate-900">{confidence.toFixed(2)}%</p>
+          <p className="text-sm text-slate-500">Risk Level</p>
+          <p className={`font-semibold ${riskClass}`}>{riskLevel}</p>
         </div>
 
-        <div id="clinical-report" className="bg-white p-10 rounded-3xl border shadow-sm space-y-8">
-
-          <h2 className="text-3xl font-extrabold text-slate-900">
-            AI Clinical Analysis Report
-          </h2>
-
-          {/* Severity Card */}
-          <div className={`p-6 rounded-xl border-l-8 ${
-            result.severity === "High"
-              ? "bg-red-50 border-red-600"
-              : result.severity === "Moderate"
-              ? "bg-yellow-50 border-yellow-500"
-              : "bg-green-50 border-green-500"
-          }`}>
-            <p className="text-lg font-bold">
-              Severity Level: {result.severity}
-            </p>
+        <div className="bg-white rounded-xl shadow-md p-6">
+          <p className="text-sm text-slate-500 mb-2">Scan Metadata</p>
+          <div className="space-y-2 text-sm">
+            <p className="text-slate-700"><span className="text-slate-500">Timestamp:</span> {new Date().toLocaleString()}</p>
+            <p className="text-slate-700"><span className="text-slate-500">System:</span> {SYSTEM_VERSION}</p>
+            <p className="text-slate-700"><span className="text-slate-500">Model:</span> {MODEL_VERSION}</p>
+            <p className="text-slate-700"><span className="text-slate-500">Recommendation:</span> {result.recommendation || "N/A"}</p>
           </div>
-
-          {/* Confidence Gauge */}
-          <div className="flex flex-col items-center">
-            <p className="text-sm text-slate-500 mb-4">
-              Model Confidence
-            </p>
-            <ConfidenceGauge value={result.confidence} />
-          </div>
-
-          {/* Risk Indicator */}
-          <div>
-            <p className="text-sm text-slate-500 mb-2">
-              Risk Score
-            </p>
-            <RiskBar score={result.riskScore} />
-          </div>
-
-          {/* Recommendation */}
-          <div>
-            <p className="text-sm text-slate-500">
-              Recommended Action
-            </p>
-            <p className="font-medium text-slate-800 mt-1">
-              {result.recommendation}
-            </p>
-          </div>
-
-          {/* Trend */}
-          {trend && (
-            <div>
-              <p className="text-sm text-slate-500">Trend</p>
-              <p className={`text-xl font-bold ${
-                trend.includes("worsening") ? "text-red-600" : "text-green-600"
-              }`}>
-                {trend}
-              </p>
-            </div>
-          )}
-
-          {/* Model Reliability Metrics */}
-          {result.models && (
-            <div className="bg-slate-50 p-6 rounded-xl border mt-4">
-              <h3 className="font-bold text-lg mb-4">Model Reliability Metrics</h3>
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <p><span className="text-slate-500">Model Agreement Score:</span> <strong>{result.agreementPercentage}%</strong></p>
-                <p><span className="text-slate-500">Avg Confidence:</span> <strong>{result.averageConfidence}%</strong></p>
-                <p><span className="text-slate-500">Std Deviation:</span> <strong>{result.confidenceStdDev}</strong></p>
-                <p><span className="text-slate-500">Reliability Score:</span> <strong>{result.reliabilityScore}%</strong></p>
-              </div>
-              <div className="mt-4">
-                <p className="text-sm text-slate-500 mb-2">Model Predictions:</p>
-                {result.models.map((m, i) => (
-                  <div key={i} className="flex justify-between text-xs py-1 border-b border-slate-200">
-                    <span>{m.model}</span>
-                    <span className={m.prediction === "Ulcer" ? "text-red-600" : "text-green-600"}>
-                      {m.prediction} ({m.confidence}%)
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="text-xs text-slate-500 mt-4 text-center">
-            <AlertCircle className="inline w-3 h-3 mr-1 mb-0.5" /> AI cannot give a definitive diagnosis. Always consult a verified medical practitioner.
-          </div>
-
-          <button type="button" onClick={onSave} className="w-full bg-blue-600 text-white py-3.5 rounded-xl font-bold hover:bg-blue-700 active:scale-95 shadow-lg transition-all duration-150">
-            Save Result to History
-          </button>
-
-          <button
-            onClick={downloadPDF}
-            className="w-full bg-slate-900 text-white py-3 rounded-xl font-bold mt-6 hover:bg-slate-800 active:scale-95 transition-all duration-150"
-          >
-            Download Clinical Report (PDF)
-          </button>
+          {trend ? <p className={`mt-3 text-sm font-medium ${trend.includes("worsening") ? "text-red-500" : "text-emerald-500"}`}>{trend}</p> : null}
         </div>
+
+        <button type="button" onClick={onSave} className="w-full bg-blue-600 text-white py-3 rounded-xl font-semibold hover:bg-blue-700">Save Result to History</button>
+        <button onClick={downloadPDF} className="w-full bg-slate-900 text-white py-3 rounded-xl font-semibold hover:bg-slate-800">Download Clinical Report (PDF)</button>
       </div>
     </div>
   );
@@ -932,7 +1081,7 @@ const MyHistoryPage = ({ navigate, history, userData }) => {
           <select
             value={exportFilter}
             onChange={(event) => setExportFilter(event.target.value)}
-            className="rounded-lg border border-slate-300 px-3 py-2 text-slate-700 transition-all duration-150 focus:ring-2 focus:ring-blue-600 focus:border-blue-600"
+            className="rounded-lg border border-slate-300 px-3 py-2 text-slate-700 focus:ring-2 focus:ring-blue-600 focus:border-blue-600"
           >
             <option value="all">Export all</option>
             <option value="ulcer">Export ulcer-only</option>
@@ -941,7 +1090,7 @@ const MyHistoryPage = ({ navigate, history, userData }) => {
           <button
             type="button"
             onClick={handleExportCsv}
-            className="rounded-xl px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 active:scale-95 transition-all duration-150"
+            className="rounded-xl px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 active:scale-95"
           >
             Export CSV
           </button>
@@ -950,20 +1099,22 @@ const MyHistoryPage = ({ navigate, history, userData }) => {
 
       <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-lg hover:shadow-xl transition-shadow duration-300">
         {history.length > 0 ? (
+          <div className="overflow-x-auto">
           <table className="w-full text-sm text-left divide-y divide-slate-200">
             <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-100 text-xs uppercase">
-              <tr><th className="px-8 py-5">Date</th><th className="px-8 py-5">Result</th><th className="px-8 py-5">Note</th></tr>
+              <tr><th className="px-4 sm:px-8 py-4 sm:py-5">Date</th><th className="px-4 sm:px-8 py-4 sm:py-5">Result</th><th className="px-4 sm:px-8 py-4 sm:py-5 hidden sm:table-cell">Note</th></tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {history.map((item) => (
                 <tr key={item.id} className="hover:bg-slate-50 transition-colors duration-150">
-                  <td className="px-8 py-5 font-bold text-slate-700">{item.dateString}</td>
-                  <td className="px-8 py-5"><Badge type={item.status}>{item.result}</Badge></td>
-                  <td className="px-8 py-5 text-slate-400 italic">Image not retained (Privacy)</td>
+                  <td className="px-4 sm:px-8 py-4 sm:py-5 font-bold text-slate-700">{item.dateString}</td>
+                  <td className="px-4 sm:px-8 py-4 sm:py-5"><Badge type={item.status}>{item.result}</Badge></td>
+                  <td className="px-4 sm:px-8 py-4 sm:py-5 text-slate-400 italic hidden sm:table-cell">Image not retained (Privacy)</td>
                 </tr>
               ))}
             </tbody>
           </table>
+          </div>
         ) : <div className="p-8 text-center text-slate-500">No history found.</div>}
       </div>
     </div>
@@ -978,188 +1129,181 @@ const MetricCard = ({ title, value }) => (
   </div>
 );
 
-const KPICard = ({ title, value, type }) => {
-  const styles = {
-    neutral: "bg-white border border-slate-200 text-slate-800",
-    success: "bg-green-50 border border-green-200 text-green-700",
-    danger: "bg-red-50 border border-red-200 text-red-600",
-    warning: "bg-yellow-50 border border-yellow-200 text-yellow-700",
-    info: "bg-blue-50 border border-blue-200 text-blue-700",
-  };
-
-  return (
-    <div className={`rounded-2xl p-6 shadow-sm transition hover:shadow-md ${styles[type]}`}>
-      <p className="text-xs uppercase font-semibold tracking-wide opacity-70">
-        {title}
-      </p>
-      <h2 className="text-3xl font-bold mt-2">
-        {value}
-      </h2>
+const KPICard = ({ title, value, icon: Icon, color }) => (
+  <div className="bg-white rounded-xl shadow-md p-6">
+    <div className="flex items-center justify-between mb-4">
+      <p className="text-slate-500 text-sm">{title}</p>
+      <Icon className={`h-5 w-5 ${color}`} />
     </div>
+    <p className="text-3xl font-semibold text-slate-900">{value}</p>
+  </div>
+);
+
+const DoctorDashboard = ({ allScans }) => {
+  const sortedScans = useMemo(
+    () =>
+      [...allScans].sort(
+        (a, b) =>
+          (b.createdAt?.seconds || 0) -
+          (a.createdAt?.seconds || 0)
+      ),
+    [allScans]
   );
-};
 
-const DoctorDashboard = ({ navigate, allScans }) => {
-  const {
-    totalScans,
-    ulcerCount,
-    healthyCount,
-    ulcerRate,
-    avgConfidence,
-    falsePositives,
-    highRiskCount,
-    reliabilityScore,
-  } = useMemo(() => {
-    const totalScansValue = allScans.length;
-    const ulcerScans = allScans.filter((scan) => (scan.finalLabel || scan.result) === 'Ulcer');
-    const ulcerCountValue = ulcerScans.length;
-    const healthyCountValue = totalScansValue - ulcerCountValue;
-    const ulcerRateValue = totalScansValue ? ((ulcerCountValue / totalScansValue) * 100).toFixed(1) : 0;
-    const avgConfidenceValue = totalScansValue
-      ? (allScans.reduce((accumulator, scan) => accumulator + (Number(scan.confidence) || 0), 0) / totalScansValue).toFixed(1)
-      : 0;
-    const falsePositivesValue = allScans.filter((scan) => scan.reviewStatus === 'false_positive').length;
-    const highRiskCountValue = allScans.filter((scan) => (Number(scan.confidence) || 0) > 85).length;
-    const reliabilityScoreValue = totalScansValue ? (Number(avgConfidenceValue) * 0.9).toFixed(1) : 0;
+  const metrics = useMemo(() => {
+    const totalPatients = new Set(allScans.map((scan) => scan.userId).filter(Boolean)).size;
+    const totalScans = allScans.length;
+    const ulcersDetected = allScans.filter((scan) => (scan.finalLabel || scan.result) === "Ulcer" || scan.is_ulcer).length;
+    const pendingReviews = allScans.filter((scan) => (scan.reviewStatus || "pending") === "pending").length;
 
-    return {
-      totalScans: totalScansValue,
-      ulcerCount: ulcerCountValue,
-      healthyCount: healthyCountValue,
-      ulcerRate: ulcerRateValue,
-      avgConfidence: avgConfidenceValue,
-      falsePositives: falsePositivesValue,
-      highRiskCount: highRiskCountValue,
-      reliabilityScore: reliabilityScoreValue,
-    };
+    return { totalPatients, totalScans, ulcersDetected, pendingReviews };
   }, [allScans]);
 
-  // 2. Prepare Chart Data
-  // Patient Stats for Bar Chart
-  const patientStatsMap = {};
-  allScans.forEach(scan => {
-    const name = scan.patientName.split(' ')[0]; // First name only for brevity
-    if (!patientStatsMap[name]) patientStatsMap[name] = { name, ulcer: 0, healthy: 0 };
-    if ((scan.finalLabel || scan.result) === 'Ulcer') patientStatsMap[name].ulcer++;
-    else patientStatsMap[name].healthy++;
-  });
-  const patientStats = Object.values(patientStatsMap).slice(0, 7); // Show top 7
+  const highPriorityAlerts = useMemo(
+    () => sortedScans.filter((scan) => (scan.finalLabel || scan.result) === "Ulcer" || scan.is_ulcer).slice(0, 6),
+    [sortedScans]
+  );
 
-  // Time Series for Line Chart
-  const timeSeriesMap = {};
-  allScans.forEach(scan => {
-    const date = scan.dateString; 
-    if (!timeSeriesMap[date]) timeSeriesMap[date] = { date, ulcerCount: 0 };
-    if ((scan.finalLabel || scan.result) === 'Ulcer') timeSeriesMap[date].ulcerCount++;
-  });
-  const timeSeries = Object.values(timeSeriesMap).sort((a, b) => new Date(a.date) - new Date(b.date));
+  const recentScans = useMemo(() => sortedScans.slice(0, 8), [sortedScans]);
 
-  // Pie Data
-  const pieData = [
-    { name: "Ulcer", value: ulcerCount },
-    { name: "Healthy", value: healthyCount },
-  ];
-  const PIE_COLORS = ['#ef4444', '#22c55e'];
+  const riskDistribution = useMemo(() => {
+    const healthy = allScans.filter((scan) => (scan.finalLabel || scan.result) === "Healthy").length;
+    const ulcer = allScans.filter((scan) => (scan.finalLabel || scan.result) === "Ulcer" || scan.is_ulcer).length;
+    const pending = allScans.filter((scan) => (scan.reviewStatus || "pending") === "pending").length;
+    const followUp = allScans.filter((scan) => ["High", "Moderate"].includes(scan.riskLevel || scan.severity || "") && (scan.reviewStatus || "pending") !== "verified").length;
+
+    const maxValue = Math.max(healthy, ulcer, pending, followUp, 1);
+
+    return [
+      { label: "Healthy", value: healthy, color: "bg-emerald-500" },
+      { label: "Ulcer Detected", value: ulcer, color: "bg-red-500" },
+      { label: "Pending Review", value: pending, color: "bg-amber-500" },
+      { label: "Follow-up Required", value: followUp, color: "bg-blue-600" },
+    ].map((item) => ({ ...item, width: `${(item.value / maxValue) * 100}%` }));
+  }, [allScans]);
 
   return (
-    <div className="max-w-7xl mx-auto px-6 py-8 space-y-8">
+    <div className="space-y-6">
+      <section className="bg-linear-to-r from-blue-600 to-blue-500 rounded-xl p-6 text-white shadow-md">
+        <h1 className="text-2xl font-semibold">Clinical Overview</h1>
+        <p className="text-blue-100 mt-1">Centralized monitoring for diabetic foot ulcer detection workflows.</p>
+      </section>
 
-      {/* HEADER */}
-      <div>
-        <div className="flex items-center gap-3 mb-2">
-          <h1 className="text-3xl font-bold text-slate-800">
-            AI Clinical Dashboard
-          </h1>
-          <span className="bg-blue-100 text-blue-700 text-xs px-3 py-1 rounded-full font-semibold">
-            AI Model Powered
-          </span>
+      <section className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <KPICard title="Total Patients" value={metrics.totalPatients} icon={User} color="text-blue-600" />
+        <KPICard title="Total Scans" value={metrics.totalScans} icon={FileText} color="text-blue-600" />
+        <KPICard title="Ulcers Detected" value={metrics.ulcersDetected} icon={AlertCircle} color="text-red-500" />
+        <KPICard title="Pending Reviews" value={metrics.pendingReviews} icon={Filter} color="text-amber-500" />
+      </section>
+
+      <section className="bg-white rounded-xl shadow-md p-6">
+        <h2 className="text-lg font-semibold text-slate-900 mb-4">High Priority Alerts</h2>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-slate-500 border-b border-slate-200">
+                <th className="py-3 pr-4">Patient ID</th>
+                <th className="py-3 pr-4">Date</th>
+                <th className="py-3 pr-4">Diagnosis</th>
+                <th className="py-3">Confidence</th>
+              </tr>
+            </thead>
+            <tbody>
+              {highPriorityAlerts.length === 0 ? (
+                <tr><td className="py-4 text-slate-500" colSpan={4}>No high-priority alerts.</td></tr>
+              ) : (
+                highPriorityAlerts.map((scan) => (
+                  <tr key={scan.id} className="border-b border-slate-100 hover:bg-slate-50">
+                    <td className="py-3 pr-4 text-slate-700">{scan.userId?.slice(0, 8) || "N/A"}</td>
+                    <td className="py-3 pr-4 text-slate-600">{scan.dateString || "N/A"}</td>
+                    <td className="py-3 pr-4 text-red-500 font-medium">{scan.diagnosis || scan.finalLabel || scan.result || "Ulcer"}</td>
+                    <td className="py-3 text-slate-700">{Number(scan.confidence || 0).toFixed(2)}%</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
-        <p className="text-slate-500 mt-1">
-          Real-time diabetic foot ulcer monitoring system
-        </p>
-      </div>
+      </section>
 
-      {/* RISK ALERT BANNER */}
-      {Number(ulcerRate) > 50 && (
-        <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-xl">
-          <p className="text-red-700 font-semibold">
-            High Ulcer Detection Rate — Immediate monitoring recommended.
-          </p>
-        </div>
-      )}
+      <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 bg-white rounded-xl shadow-md p-6">
+          <h2 className="text-lg font-semibold text-slate-900 mb-4">Recent Scan Activity</h2>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-slate-500 border-b border-slate-200">
+                  <th className="py-3 pr-4">Patient</th>
+                  <th className="py-3 pr-4">Date</th>
+                  <th className="py-3 pr-4">Diagnosis</th>
+                  <th className="py-3 pr-4">Confidence</th>
+                  <th className="py-3">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recentScans.map((scan) => {
+                  const diagnosis = scan.finalLabel || scan.result || "N/A";
+                  const statusClass = diagnosis === "Ulcer"
+                    ? "bg-red-100 text-red-500"
+                    : (scan.reviewStatus || "pending") === "pending"
+                    ? "bg-amber-100 text-amber-500"
+                    : "bg-emerald-100 text-emerald-500";
+                  const statusText = (scan.reviewStatus || "pending") === "pending"
+                    ? "Pending Review"
+                    : diagnosis === "Ulcer"
+                    ? "Ulcer Detected"
+                    : "Healthy";
 
-      {/* KPI GRID */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <KPICard title="Total Scans" value={totalScans} type="neutral" />
-        <KPICard title="Ulcer Rate" value={`${ulcerRate}%`} type="danger" />
-        <KPICard title="Avg Confidence" value={`${avgConfidence}%`} type="info" />
-        <KPICard title="False Positives" value={falsePositives} type="warning" />
-        <KPICard title="High Risk Cases" value={highRiskCount} type="danger" />
-        <KPICard title="Reliability Score" value={`${reliabilityScore}%`} type="success" />
-      </div>
-
-      {/* ANALYTICS SECTION */}
-      <div className="grid md:grid-cols-2 gap-6">
-        {/* Patient Breakdown */}
-        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-lg hover:shadow-xl transition-shadow duration-300">
-          <h3 className="font-bold text-lg text-slate-800 mb-6">Patient Breakdown</h3>
-          <div className="h-72 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={patientStats}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis dataKey="name" stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} />
-                <YAxis stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} />
-                <RechartsTooltip cursor={{fill: '#f8fafc'}} contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)'}} />
-                <RechartsLegend />
-                <Bar dataKey="ulcer" name="Ulcer" fill="#ef4444" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="healthy" name="Healthy" fill="#22c55e" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+                  return (
+                    <tr key={scan.id} className="border-b border-slate-100 hover:bg-slate-50">
+                      <td className="py-3 pr-4 text-slate-700">{scan.patientName || "N/A"}</td>
+                      <td className="py-3 pr-4 text-slate-600">{scan.dateString || "N/A"}</td>
+                      <td className="py-3 pr-4 text-slate-700">{scan.diagnosis || diagnosis}</td>
+                      <td className="py-3 pr-4 text-slate-700">{Number(scan.confidence || 0).toFixed(2)}%</td>
+                      <td className="py-3"><span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${statusClass}`}>{statusText}</span></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </div>
 
-        {/* Scan Distribution */}
-        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-lg hover:shadow-xl transition-shadow duration-300">
-          <h3 className="font-bold text-lg text-slate-800 mb-6">Scan Distribution</h3>
-          <ResponsiveContainer width="100%" height={280}>
-            <PieChart>
-              <Pie
-                data={pieData}
-                dataKey="value"
-                nameKey="name"
-                innerRadius={60}
-                outerRadius={90}
-              >
-                {pieData.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
-                ))}
-              </Pie>
-              <RechartsTooltip contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)'}} />
-              <RechartsLegend verticalAlign="bottom" height={36}/>
-            </PieChart>
-          </ResponsiveContainer>
+        <div className="bg-white rounded-xl shadow-md p-6">
+          <h2 className="text-lg font-semibold text-slate-900 mb-4">Risk Distribution</h2>
+          <div className="space-y-4">
+            {riskDistribution.map((item) => (
+              <div key={item.label}>
+                <div className="flex justify-between text-sm mb-1">
+                  <span className="text-slate-600">{item.label}</span>
+                  <span className="text-slate-900 font-medium">{item.value}</span>
+                </div>
+                <div className="h-2.5 rounded-full bg-slate-100 overflow-hidden">
+                  <div className={`h-full ${item.color}`} style={{ width: item.width }} />
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
-      </div>
-
-      {/* TREND */}
-      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-lg hover:shadow-xl transition-shadow duration-300">
-        <h3 className="font-bold text-lg text-slate-800 mb-6">Ulcer Detection Trend</h3>
-        <ResponsiveContainer width="100%" height={300}>
-          <LineChart data={timeSeries}>
-            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-            <XAxis dataKey="date" stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} />
-            <YAxis stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} />
-            <RechartsTooltip contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)'}} />
-            <Line type="monotone" dataKey="ulcerCount" stroke="#ef4444" strokeWidth={3} dot={{r: 4, fill: '#ef4444', strokeWidth: 2, stroke: '#fff'}} activeDot={{r: 6}} />
-          </LineChart>
-        </ResponsiveContainer>
-      </div>
-
+      </section>
     </div>
   );
 };
 
-const Footer = () => <footer className="bg-slate-900 text-slate-400 py-12 text-center mt-auto">© 2026 DFU-Detect</footer>;
+const Footer = ({ isPortalUser = false }) => (
+  <footer className={`bg-white border-t border-slate-200 py-6 mt-auto ${isPortalUser ? "lg:pl-72" : ""}`}>
+    <div className="max-w-7xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <div className="flex items-center gap-3">
+        <DfuLogo size={32} className="rounded-lg" />
+        <div>
+          <p className="text-sm font-semibold text-slate-900">DFU-Detect</p>
+          <p className="text-xs text-slate-500">AI Assisted Diabetic Foot Ulcer Detection System</p>
+        </div>
+      </div>
+      <p className="text-xs text-slate-500">© 2026 Philip Andrew</p>
+    </div>
+  </footer>
+);
 const Badge = ({ children, type }) => {
   const badgeStyles = {
     red: "bg-red-100 text-red-700",
@@ -1175,15 +1319,52 @@ const Badge = ({ children, type }) => {
   );
 };
 
-const EducationHub = () => (
-  <div className="p-10 text-center">
-    <h2 className="text-2xl font-bold mb-4">Education Hub</h2>
-    <p className="mb-8">Learn more about diabetic foot ulcers and prevention.</p>
-    <div className="text-xs text-slate-500 mt-4 text-center">
-      <AlertCircle className="inline w-3 h-3 mr-1 mb-0.5" /> AI cannot give a definitive diagnosis. Always consult a verified medical practitioner.
+const EducationHub = () => {
+  const sections = [
+    {
+      title: "What is a Diabetic Foot Ulcer",
+      description: "A diabetic foot ulcer is an open wound or sore that develops due to poor circulation, nerve damage, or prolonged pressure on the foot.",
+    },
+    {
+      title: "Early Warning Signs",
+      description: "Look for skin discoloration, persistent redness, swelling, blisters, drainage, numbness, or unusual warmth around the affected area.",
+    },
+    {
+      title: "Risk Factors",
+      description: "Uncontrolled blood glucose, peripheral neuropathy, poor circulation, smoking, ill-fitting footwear, and prior ulcer history increase risk.",
+    },
+    {
+      title: "Prevention Tips",
+      description: "Inspect feet daily, keep skin clean and moisturized, wear protective footwear, trim nails safely, and attend regular foot checks.",
+    },
+    {
+      title: "When to See a Doctor",
+      description: "Seek immediate care for non-healing wounds, signs of infection, foul odor, fever, severe pain, or rapidly worsening discoloration.",
+    },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <section className="bg-linear-to-r from-blue-600 to-blue-500 rounded-xl p-6 text-white shadow-md">
+        <h2 className="text-2xl font-semibold">Education Hub</h2>
+        <p className="text-blue-100 mt-1">Clinically guided diabetic foot ulcer awareness and prevention.</p>
+      </section>
+
+      <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {sections.map((section) => (
+          <article key={section.title} className="bg-white rounded-xl shadow-md p-6">
+            <h3 className="text-lg font-semibold text-slate-900 mb-2">{section.title}</h3>
+            <p className="text-sm text-slate-600 leading-relaxed">{section.description}</p>
+          </article>
+        ))}
+      </section>
+
+      <p className="text-xs text-slate-500 bg-slate-100 rounded-lg px-4 py-3">
+        AI outputs are supportive tools and do not replace formal medical diagnosis. Consult a licensed healthcare provider for treatment decisions.
+      </p>
     </div>
-  </div>
-);
+  );
+};
 
 const PatientRecords = ({ allScans, userData, onSelectPatient, loading = false, error = "" }) => {
   const [filter, setFilter] = useState("all");
@@ -1228,9 +1409,9 @@ const PatientRecords = ({ allScans, userData, onSelectPatient, loading = false, 
   });
 
   return (
-    <div className="w-full max-w-6xl mx-auto py-8 space-y-8">
-      <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-slate-900">Patient Records</h1>
+    <div className="w-full max-w-6xl mx-auto py-4 sm:py-8 space-y-6 sm:space-y-8 px-1 sm:px-0">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+        <h1 className="text-xl sm:text-2xl font-bold text-slate-900">Patient Records</h1>
         <select 
           onChange={(e) => setFilter(e.target.value)}
           className="bg-white border border-slate-200 text-slate-700 text-sm rounded-xl focus:ring-blue-500 focus:border-blue-500 block p-2.5 shadow-sm"
@@ -1241,7 +1422,7 @@ const PatientRecords = ({ allScans, userData, onSelectPatient, loading = false, 
         </select>
       </div>
 
-      <div className="bg-white border border-slate-100 rounded-3xl overflow-hidden shadow-xl">
+      <div className="bg-white border border-slate-100 rounded-2xl sm:rounded-3xl overflow-hidden shadow-xl">
         {loading ? (
           <div className="p-8 text-center text-slate-500">Loading patient records...</div>
         ) : error ? (
@@ -1249,24 +1430,25 @@ const PatientRecords = ({ allScans, userData, onSelectPatient, loading = false, 
         ) : filteredScans.length === 0 ? (
           <div className="p-8 text-center text-slate-500">No patient records found yet.</div>
         ) : (
-          <table className="w-full text-sm text-left">
+          <div className="overflow-x-auto">
+          <table className="w-full text-sm text-left min-w-160">
             <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-100 text-xs uppercase">
               <tr>
-                <th className="px-6 py-4">Patient</th>
-                <th className="px-6 py-4">Date</th>
-                <th className="px-6 py-4">Result</th>
-                <th className="px-6 py-4">Severity</th>
-                <th className="px-6 py-4">Status</th>
-                <th className="px-6 py-4">Action</th>
+                <th className="px-4 sm:px-6 py-4">Patient</th>
+                <th className="px-4 sm:px-6 py-4">Date</th>
+                <th className="px-4 sm:px-6 py-4">Result</th>
+                <th className="px-4 sm:px-6 py-4">Severity</th>
+                <th className="px-4 sm:px-6 py-4 hidden sm:table-cell">Status</th>
+                <th className="px-4 sm:px-6 py-4">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filteredScans.map((scan) => (
                 <tr key={scan.id} className="hover:bg-slate-50 cursor-pointer" onClick={() => onSelectPatient(scan.userId)}>
-                  <td className="px-6 py-4 font-bold text-slate-800">{scan.patientName}</td>
-                  <td className="px-6 py-4 text-slate-500">{scan.dateString}</td>
-                  <td className="px-6 py-4"><Badge type={scan.status}>{scan.result}</Badge></td>
-                  <td className="px-6 py-4">
+                  <td className="px-4 sm:px-6 py-4 font-bold text-slate-800">{scan.patientName}</td>
+                  <td className="px-4 sm:px-6 py-4 text-slate-500">{scan.dateString}</td>
+                  <td className="px-4 sm:px-6 py-4"><Badge type={scan.status}>{scan.result}</Badge></td>
+                  <td className="px-4 sm:px-6 py-4">
                     <span className={`px-2 py-1 rounded text-xs font-bold ${
                       getSeverity(scan.confidence) === "High"
                         ? "bg-red-100 text-red-700"
@@ -1277,14 +1459,14 @@ const PatientRecords = ({ allScans, userData, onSelectPatient, loading = false, 
                       {getSeverity(scan.confidence)}
                     </span>
                   </td>
-                  <td className="px-6 py-4">
+                  <td className="px-4 sm:px-6 py-4 hidden sm:table-cell">
                     {scan.reviewStatus === 'verified' ? (
                       <span className="text-xs text-green-600 font-bold">Verified by {scan.verifiedBy}</span>
                     ) : (
                       <span className="text-xs text-yellow-600 font-bold uppercase tracking-wider">Pending</span>
                     )}
                   </td>
-                  <td className="px-6 py-4">
+                  <td className="px-4 sm:px-6 py-4">
                     <button
                       onClick={(e) => { e.stopPropagation(); onSelectPatient(scan.userId); }}
                       className="text-blue-600 font-bold hover:text-blue-800"
@@ -1296,6 +1478,7 @@ const PatientRecords = ({ allScans, userData, onSelectPatient, loading = false, 
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
     </div>
@@ -1303,62 +1486,81 @@ const PatientRecords = ({ allScans, userData, onSelectPatient, loading = false, 
 };
 
 const PatientDetail = ({ navigate, allScans, patientId }) => {
-  const patientScans = allScans.filter(s => s.userId === patientId);
+  const patientScans = allScans
+    .filter((scan) => scan.userId === patientId)
+    .sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
   const patientName = patientScans[0]?.patientName || "Unknown Patient";
-  const lastScan = patientScans[0]; // Assuming sorted desc
-  const ulcerCount = patientScans.filter(s => s.finalLabel === 'Ulcer').length;
-  const ulcerRate = patientScans.length ? ((ulcerCount / patientScans.length) * 100).toFixed(0) : 0;
-  
-  // Risk Classification
-  let riskClass = "Low";
-  if (ulcerRate > 50 || (lastScan && lastScan.riskScore > 70)) riskClass = "High";
-  else if (ulcerRate > 20 || (lastScan && lastScan.riskScore > 40)) riskClass = "Moderate";
-
-  // Chart Data
-  const chartData = patientScans.slice().reverse().map(s => ({
-    date: s.dateString,
-    risk: s.riskScore || 0
-  }));
+  const lastScan = patientScans[patientScans.length - 1];
+  const ulcerCount = patientScans.filter((scan) => (scan.finalLabel || scan.result) === "Ulcer" || scan.is_ulcer).length;
+  const riskStatus =
+    ulcerCount > 2 || ["High", "Moderate"].includes(lastScan?.riskLevel || lastScan?.severity || "")
+      ? "Follow-up Required"
+      : ulcerCount > 0
+      ? "Monitor"
+      : "Stable";
 
   return (
-    <div className="w-full max-w-6xl mx-auto py-8 space-y-8">
-      <div className="flex items-center gap-4 mb-4">
+    <div className="w-full max-w-6xl mx-auto py-2 space-y-6">
+      <div className="flex items-center gap-4">
         <button onClick={() => navigate('patient-records')} className="p-2 rounded-full hover:bg-slate-100"><ArrowRight className="h-6 w-6 rotate-180" /></button>
-        <h1 className="text-3xl font-extrabold text-slate-900">{patientName} <span className="text-slate-400 font-normal text-lg">#{patientId.slice(0,6)}</span></h1>
+        <h1 className="text-2xl font-semibold text-slate-900">Patient Record</h1>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-xl">
-          <p className="text-slate-500 text-xs font-bold uppercase">Risk Classification</p>
-          <p className={`text-3xl font-extrabold ${riskClass === 'High' ? 'text-red-600' : riskClass === 'Moderate' ? 'text-yellow-600' : 'text-green-600'}`}>{riskClass}</p>
-        </div>
-        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-xl">
-          <p className="text-slate-500 text-xs font-bold uppercase">Total Scans</p>
-          <p className="text-3xl font-extrabold text-slate-800">{patientScans.length}</p>
-        </div>
-        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-xl">
-          <p className="text-slate-500 text-xs font-bold uppercase">Ulcer Rate</p>
-          <p className="text-3xl font-extrabold text-slate-800">{ulcerRate}%</p>
-        </div>
-        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-xl">
-          <p className="text-slate-500 text-xs font-bold uppercase">Last Scan</p>
-          <p className="text-lg font-bold text-slate-800">{lastScan?.dateString || 'N/A'}</p>
-          <Badge type={lastScan?.status}>{lastScan?.result || 'N/A'}</Badge>
+      <div className="bg-white rounded-xl shadow-md p-6">
+        <h2 className="text-lg font-semibold text-slate-900 mb-4">Patient Profile Card</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-sm">
+          <div>
+            <p className="text-slate-500">Patient ID</p>
+            <p className="text-slate-900 font-medium">{patientId || "N/A"}</p>
+          </div>
+          <div>
+            <p className="text-slate-500">Name</p>
+            <p className="text-slate-900 font-medium">{patientName}</p>
+          </div>
+          <div>
+            <p className="text-slate-500">Last Scan Date</p>
+            <p className="text-slate-900 font-medium">{lastScan?.dateString || "N/A"}</p>
+          </div>
+          <div>
+            <p className="text-slate-500">Risk Status</p>
+            <p className={`font-medium ${riskStatus === "Follow-up Required" ? "text-red-500" : riskStatus === "Monitor" ? "text-amber-500" : "text-emerald-500"}`}>{riskStatus}</p>
+          </div>
         </div>
       </div>
 
-      <div className="bg-white p-8 rounded-3xl border border-slate-100 shadow-xl">
-        <h3 className="font-bold text-lg text-slate-800 mb-6">Risk Timeline</h3>
-        <div className="h-72 w-full">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-              <XAxis dataKey="date" stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} />
-              <YAxis stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} />
-              <RechartsTooltip contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)'}} />
-              <Line type="monotone" dataKey="risk" stroke="#2563eb" strokeWidth={3} dot={{r: 4, fill: '#2563eb', strokeWidth: 2, stroke: '#fff'}} activeDot={{r: 6}} />
-            </LineChart>
-          </ResponsiveContainer>
+      <div className="bg-white rounded-xl shadow-md p-6">
+        <h3 className="text-lg font-semibold text-slate-900 mb-4">Scan Timeline</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-slate-500 border-b border-slate-200">
+                <th className="py-3 pr-4">Date</th>
+                <th className="py-3 pr-4">Diagnosis</th>
+                <th className="py-3 pr-4">Confidence</th>
+                <th className="py-3">Doctor Verification</th>
+              </tr>
+            </thead>
+            <tbody>
+              {patientScans.length === 0 ? (
+                <tr><td className="py-4 text-slate-500" colSpan={4}>No scan history found.</td></tr>
+              ) : (
+                patientScans.map((scan) => (
+                  <tr key={scan.id} className="border-b border-slate-100 hover:bg-slate-50">
+                    <td className="py-3 pr-4 text-slate-600">{scan.dateString || "N/A"}</td>
+                    <td className="py-3 pr-4 text-slate-900">{scan.diagnosis || scan.finalLabel || scan.result || "N/A"}</td>
+                    <td className="py-3 pr-4 text-slate-700">{Number(scan.confidence || 0).toFixed(2)}%</td>
+                    <td className="py-3">
+                      {(scan.reviewStatus || "pending") === "verified" ? (
+                        <span className="px-2.5 py-1 rounded-full text-xs bg-emerald-100 text-emerald-600">Verified</span>
+                      ) : (
+                        <span className="px-2.5 py-1 rounded-full text-xs bg-amber-100 text-amber-600">Pending</span>
+                      )}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -1393,19 +1595,20 @@ const PatientCumulative = ({ allScans }) => {
       : allScans;
 
     // Create CSV content
-    const headers = ['Date', 'Patient', 'Diagnosis', 'Severity', 'Confidence', 'Verified', 'Reviewed By'];
+    const headers = ['Scan ID', 'Date', 'Patient ID', 'Diagnosis', 'Confidence', 'Risk Level', 'Doctor Verified', 'Notes'];
     const rows = filteredScans.map(scan => {
       const date = scan.createdAt?.toDate 
         ? scan.createdAt.toDate().toLocaleDateString() 
         : scan.dateString || 'N/A';
       return [
+        scan.scanId || scan.id || 'N/A',
         date,
-        scan.patientName || 'N/A',
-        scan.diagnosis || scan.result || 'N/A',
-        scan.riskLevel || scan.severity || 'N/A',
+        scan.userId || 'N/A',
+        scan.diagnosis || scan.finalLabel || scan.result || 'N/A',
         `${Number(scan.confidence || 0).toFixed(2)}%`,
-        scan.verified ? 'Yes' : 'No',
-        scan.reviewedBy || scan.verifiedBy || 'N/A'
+        scan.riskLevel || scan.severity || 'N/A',
+        scan.verified || scan.reviewStatus === 'verified' ? 'Yes' : 'No',
+        scan.doctorNotes || ''
       ];
     });
 
@@ -1479,8 +1682,8 @@ const TestModel = () => {
   ];
 
   return (
-    <div className="w-full max-w-4xl mx-auto py-8 space-y-8">
-      <h1 className="text-2xl font-bold text-slate-900">Model Performance Metrics</h1>
+    <div className="w-full max-w-4xl mx-auto py-2 space-y-6">
+      <h1 className="text-2xl font-semibold text-slate-900">View Models</h1>
       
       {/* Model Selection */}
       <div className="bg-white p-6 rounded-2xl shadow-lg hover:shadow-xl transition-shadow duration-300 border">
@@ -1506,30 +1709,32 @@ const TestModel = () => {
       {/* Performance Metrics per Model */}
       {modelMetrics.map(m => (
         <div key={m.id} className={`bg-white p-6 rounded-2xl border shadow-sm ${!enabledModels[m.id] ? 'opacity-50' : ''}`}>
-          <h3 className="font-bold text-lg text-slate-800 mb-4">{m.id}</h3>
-          <div className="grid grid-cols-3 gap-6">
+          <h3 className="font-semibold text-lg text-slate-900 mb-4">YOLOv11 DFU Detector ({m.id})</h3>
+          <div className="grid grid-cols-3 gap-4 sm:gap-6">
             <div>
-              <p className="text-sm text-slate-500">mAP@50</p>
-              <p className="text-2xl font-bold">{m.mAP}</p>
+              <p className="text-sm text-slate-500">mAP</p>
+              <p className="text-xl sm:text-2xl font-bold">{m.mAP}</p>
             </div>
             <div>
               <p className="text-sm text-slate-500">Precision</p>
-              <p className="text-2xl font-bold">{m.precision}</p>
+              <p className="text-xl sm:text-2xl font-bold">{m.precision}</p>
             </div>
             <div>
               <p className="text-sm text-slate-500">Recall</p>
-              <p className="text-2xl font-bold">{m.recall}</p>
+              <p className="text-xl sm:text-2xl font-bold">{m.recall}</p>
             </div>
           </div>
         </div>
       ))}
 
       <div className="bg-white p-6 rounded-2xl border shadow-lg hover:shadow-xl transition-shadow duration-300">
-        <h3 className="font-bold text-lg text-slate-800 mb-4">Model Information</h3>
-        <p className="text-slate-600">Platform: Roboflow</p>
-        <p className="text-slate-600">Training Dataset: Custom DFU Images</p>
-        <p className="text-slate-600">Architecture: YOLOv8</p>
-        <p className="text-slate-600 mt-2">Model Fusion Method: Weighted voting based on mAP scores</p>
+        <h3 className="font-semibold text-lg text-slate-900 mb-4">Model Details</h3>
+        <p className="text-slate-600">Model Name: YOLOv11 DFU Detector</p>
+        <p className="text-slate-600">Version: {MODEL_VERSION}</p>
+        <p className="text-slate-600">Precision: 91%</p>
+        <p className="text-slate-600">Recall: 88%</p>
+        <p className="text-slate-600">mAP: 89%</p>
+        <p className="text-slate-600">Last Updated: March 2026</p>
       </div>
     </div>
   );
@@ -1566,7 +1771,7 @@ const ScanResultsDoctor = ({ navigate, image, result, onSave, userData }) => {
     return "text-green-600";
   };
 
-  const handleAction = useCallback(async (action) => {
+  const handleAction = async (action) => {
     const currentUid = auth.currentUser?.uid;
     if (currentUid && action === 'false_positive') {
       logAuditAction({
@@ -1609,141 +1814,80 @@ const ScanResultsDoctor = ({ navigate, image, result, onSave, userData }) => {
         setLocalVerificationStatus('verified');
       }
     }
-  }, [notes, onSave, result, savedScanId, userData]);
+  };
 
-  const handleVerify = useCallback(async () => {
+  const handleVerify = async () => {
     await handleAction('verify');
-  }, [handleAction]);
+  };
 
   return (
-    <div className="max-w-7xl mx-auto py-10 grid lg:grid-cols-2 gap-10">
+    <div className="max-w-7xl mx-auto py-2 grid grid-cols-1 lg:grid-cols-5 gap-6">
+      <div className="lg:col-span-3 space-y-6">
+        <BoundingBoxVisualization image={image} predictions={result.predictions || []} imageMeta={result.imageMeta} />
 
-      {/* LEFT SIDE */}
-      <div className="space-y-6">
-
-        {/* Image */}
-        <div className="bg-white p-6 rounded-2xl shadow-lg hover:shadow-xl transition-shadow duration-300">
-          {image ? (
-            <img src={image} alt="Scan" className="rounded-xl w-full object-cover" />
-          ) : (
-            <div className="p-10 text-center text-slate-400">Image not available</div>
-          )}
-        </div>
-
-        {/* AI Summary */}
-        <div className="bg-white p-6 rounded-2xl shadow-lg hover:shadow-xl transition-shadow duration-300 space-y-4">
-          <h2 className="text-xl font-bold">AI Analysis Summary</h2>
-          <div className="flex justify-between">
-            <span>Prediction:</span>
-            <span className={isUlcer ? "text-red-600 font-bold" : "text-green-600 font-bold"}>
-              {isUlcer ? "Ulcer Detected" : "Healthy"}
-            </span>
+        <div className="bg-white rounded-xl shadow-md p-6">
+          <h2 className="text-lg font-semibold text-slate-900 mb-4">Model Reliability Metrics</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 text-sm">
+            <p className="text-slate-600">Model Agreement</p><p className="font-semibold text-slate-900">{agreement.toFixed(2)}%</p>
+            <p className="text-slate-600">Confidence Deviation</p><p className="font-semibold text-slate-900">{stdDev.toFixed(2)}</p>
+            <p className="text-slate-600">Reliability Score</p><p className="font-semibold text-slate-900">{reliability.toFixed(2)}%</p>
+            <p className="text-slate-600">Scan ID</p><p className="font-semibold text-slate-900 break-all">{savedScanId || "Pending Save"}</p>
           </div>
-
-          <div className="flex justify-between">
-            <span>Confidence:</span>
-            <span className="font-bold">{confidence.toFixed(2)}%</span>
-          </div>
-
-          <div className="flex justify-between">
-            <span>Risk Level:</span>
-            <span className={`font-bold ${getRiskColor()}`}>
-              {getRiskLevel()}
-            </span>
-          </div>
-        </div>
-
-        {/* Model Reliability Metrics */}
-        <div className="bg-white p-6 rounded-2xl shadow-lg hover:shadow-xl transition-shadow duration-300 space-y-4">
-          <h2 className="text-lg font-bold">Model Reliability Metrics</h2>
-
-          <div className="grid grid-cols-2 gap-4 text-sm">
-            <div>Model Agreement Score:</div>
-            <div className="font-bold">{agreement.toFixed(2)}%</div>
-
-            <div>Confidence Deviation:</div>
-            <div className="font-bold">{stdDev.toFixed(2)}</div>
-
-            <div>Reliability Score:</div>
-            <div className="font-bold">{reliability.toFixed(2)}%</div>
-          </div>
-
-          <p className="text-xs text-slate-500 mt-2">
-            Higher agreement and lower deviation indicate more stable model predictions.
-          </p>
         </div>
       </div>
 
-      {/* RIGHT SIDE */}
-      <div className="space-y-6">
+      <div className="lg:col-span-2 space-y-4">
+        <div className="bg-white rounded-xl shadow-md p-6 space-y-3">
+          <h2 className="text-lg font-semibold text-slate-900">Diagnosis Card</h2>
+          <p className="text-sm text-slate-500">Diagnosis</p>
+          <p className={`font-semibold ${isUlcer ? "text-red-500" : "text-emerald-500"}`}>{isUlcer ? "Ulcer Detected" : "Healthy"}</p>
+          <p className="text-sm text-slate-500">Confidence Score</p>
+          <p className="text-2xl font-semibold text-slate-900">{confidence.toFixed(2)}%</p>
+          <p className="text-sm text-slate-500">Risk Level</p>
+          <p className={`font-semibold ${getRiskColor()}`}>{getRiskLevel()}</p>
+          <p className="text-sm text-slate-500">Scan Metadata</p>
+          <p className="text-sm text-slate-700">System: {SYSTEM_VERSION} | Model: {MODEL_VERSION}</p>
+        </div>
 
-        {/* Model Breakdown */}
-        <div className="bg-white p-6 rounded-2xl shadow-lg hover:shadow-xl transition-shadow duration-300">
-          <h2 className="text-lg font-bold mb-4">Model Breakdown</h2>
+        <div className="bg-white rounded-xl shadow-md p-6">
+          <h2 className="text-lg font-semibold text-slate-900 mb-3">Model Breakdown</h2>
           <table className="w-full text-sm divide-y divide-slate-200">
             <thead>
               <tr className="text-left text-slate-500">
-                <th>Model</th>
-                <th>Prediction</th>
-                <th>Confidence</th>
+                <th className="py-2">Model</th>
+                <th className="py-2">Diagnosis</th>
+                <th className="py-2">Confidence</th>
               </tr>
             </thead>
             <tbody>
-              {modelBreakdown.map((m, index) => (
-                <tr key={index} className="border-t hover:bg-slate-50 transition-colors duration-150">
-                  <td className="py-2">{m.model}</td>
-                  <td className={m.prediction === "Ulcer" ? "text-red-600" : "text-green-600"}>
-                    {m.prediction}
-                  </td>
-                  <td>{m.confidence.toFixed(2)}%</td>
+              {modelBreakdown.map((model, index) => (
+                <tr key={index} className="border-t border-slate-100 hover:bg-slate-50">
+                  <td className="py-2 text-slate-700">{model.model}</td>
+                  <td className={`py-2 ${model.prediction === "Ulcer" ? "text-red-500" : "text-emerald-500"}`}>{model.prediction}</td>
+                  <td className="py-2 text-slate-700">{Number(model.confidence || 0).toFixed(2)}%</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
 
-        {/* Doctor Review */}
-        <div className="bg-white p-6 rounded-2xl shadow-lg hover:shadow-xl transition-shadow duration-300 space-y-4">
-          <h2 className="text-lg font-bold">Doctor Review</h2>
-
+        <div className="bg-white rounded-xl shadow-md p-6 space-y-3">
+          <h2 className="text-lg font-semibold text-slate-900">Doctor Review</h2>
           <textarea
             placeholder="Enter clinical observations..."
-            className="w-full border border-slate-200 rounded-lg p-3 text-sm transition-all duration-150 focus:ring-2 focus:ring-blue-600 focus:border-blue-600"
+            className="w-full border border-slate-200 rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-600 focus:border-blue-600"
             rows="4"
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
           />
 
-          <button
-            type="button"
-            onClick={handleVerify}
-            className="w-full bg-green-600 text-white py-2 rounded-lg font-semibold hover:bg-green-700 active:scale-95 transition-all duration-150 disabled:opacity-60 disabled:cursor-not-allowed"
-          >
-            Verify AI Result
-          </button>
+          <button type="button" onClick={handleVerify} className="w-full bg-emerald-600 text-white py-2.5 rounded-lg font-semibold hover:bg-emerald-700">Verify AI Result</button>
+          <button type="button" onClick={() => handleAction('false_positive')} className="w-full bg-red-100 text-red-600 border border-red-300 py-2.5 rounded-lg font-semibold hover:bg-red-200">Mark False Positive</button>
+          <button type="button" onClick={() => handleAction('pending')} className="w-full bg-blue-600 text-white py-2.5 rounded-lg font-semibold hover:bg-blue-700">Save for Follow Up</button>
 
           <p className="text-xs text-slate-500">
-            Current verification status:{" "}
-            <span className={`px-3 py-1 text-xs font-semibold rounded-full ${localVerificationStatus === 'verified' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
-              {localVerificationStatus === 'verified' ? 'Verified' : 'Pending'}
-            </span>
+            Verification status: <span className={`px-2 py-1 rounded-full ${localVerificationStatus === 'verified' ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-100 text-amber-600'}`}>{localVerificationStatus === 'verified' ? 'Verified' : 'Pending'}</span>
           </p>
-
-          <button
-            type="button"
-            onClick={() => handleAction('false_positive')}
-            className="w-full bg-red-100 text-red-600 border border-red-400 py-2 rounded-lg font-semibold hover:bg-red-200 active:scale-95 transition-all duration-150"
-          >
-            Mark False Positive (Override)
-          </button>
-
-          <button
-            type="button"
-            onClick={() => handleAction('pending')}
-            className="w-full bg-blue-600 text-white py-2 rounded-lg font-semibold hover:bg-blue-700 active:scale-95 transition-all duration-150"
-          >
-            Save for Follow Up
-          </button>
 
           <button
             type="button"
@@ -1770,13 +1914,55 @@ const ScanResultsDoctor = ({ navigate, image, result, onSave, userData }) => {
                 containerId: null,
               });
             }}
-            className="w-full bg-slate-900 text-white py-2 rounded-lg font-semibold hover:bg-slate-800 active:scale-95 transition-all duration-150 mt-2"
+            className="w-full bg-slate-900 text-white py-2.5 rounded-lg font-semibold hover:bg-slate-800"
           >
             Download Clinical Report (PDF)
           </button>
         </div>
-
       </div>
     </div>
   );
 };
+
+const SettingsPage = ({ userData, onLogout, navigate, isDarkMode, onToggleDarkMode }) => (
+  <div className="max-w-4xl mx-auto py-4 sm:py-8 space-y-6">
+    <section className="bg-white rounded-xl shadow-md border border-slate-200 p-5 sm:p-6">
+      <h2 className="text-xl font-semibold text-slate-900">Settings</h2>
+      <p className="text-sm text-slate-500 mt-1">Manage your account and quick actions.</p>
+
+      <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+        <div className="rounded-lg border border-slate-200 p-4">
+          <p className="text-slate-500">Name</p>
+          <p className="font-medium text-slate-900 wrap-break-word">{userData?.firstName || ""} {userData?.lastName || ""}</p>
+        </div>
+        <div className="rounded-lg border border-slate-200 p-4">
+          <p className="text-slate-500">Role</p>
+          <p className="font-medium text-slate-900 capitalize">{userData?.role || "N/A"}</p>
+        </div>
+      </div>
+
+      <div className="mt-4 rounded-lg border border-slate-200 p-4 flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium text-slate-900">Dark Mode</p>
+          <p className="text-xs text-slate-500">Switch between light and dark appearance.</p>
+        </div>
+        <button
+          type="button"
+          onClick={onToggleDarkMode}
+          className={`min-w-24 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${isDarkMode ? "bg-blue-600 text-white hover:bg-blue-700" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
+        >
+          {isDarkMode ? "On" : "Off"}
+        </button>
+      </div>
+
+      <div className="mt-5 flex flex-col sm:flex-row gap-3">
+        <button type="button" onClick={() => navigate(userData?.role === 'doctor' ? 'doctor-dashboard' : 'patient-dashboard')} className="w-full sm:w-auto rounded-xl px-4 py-2.5 bg-blue-600 text-white font-medium hover:bg-blue-700">
+          Back to Dashboard
+        </button>
+        <button type="button" onClick={onLogout} className="w-full sm:w-auto rounded-xl px-4 py-2.5 bg-slate-900 text-white font-medium hover:bg-slate-800">
+          Logout
+        </button>
+      </div>
+    </section>
+  </div>
+);

@@ -54,46 +54,31 @@ function applyFilter(history, mode) {
 
 export function exportPatientCsv({ patient, history, filterMode = "all" }) {
   const filtered = applyFilter(history, filterMode);
-  const totalScans = filtered.length;
-  const ulcerCount = filtered.filter(
-    (scan) => (scan.finalLabel || scan.result) === "Ulcer" || scan.is_ulcer
-  ).length;
-  const ulcerRate = totalScans ? `${((ulcerCount / totalScans) * 100).toFixed(1)}%` : "0%";
+  const patientIdentifier = patient.systemId || patient.uid || "N/A";
 
-  const riskClassification =
-    ulcerCount > 0 && totalScans > 0
-      ? ulcerCount / totalScans > 0.5
-        ? "High"
-        : "Moderate"
-      : "Low";
-
-  const summaryRows = [
-    ["Field", "Value"],
-    ["Name", patient.fullName || `${patient.firstName || ""} ${patient.lastName || ""}`.trim() || "N/A"],
-    ["ID", patient.systemId || patient.uid || "N/A"],
-    ["Total scans", totalScans],
-    ["Ulcer rate", ulcerRate],
-    ["Risk classification", riskClassification],
-    ["Generated date", new Date().toLocaleString("en-US")],
-    ["System version", SYSTEM_VERSION],
-    ["Model version", MODEL_VERSION],
-  ];
-
-  const historyRows = filtered.map((scan) => ({
+  const exportRows = filtered.map((scan) => ({
+    "Scan ID": scan.scanId || scan.id || "N/A",
     Date: formatDate(scan),
-    Diagnosis: scan.diagnosis || scan.result || "N/A",
-    Severity: scan.riskLevel || scan.severity || "N/A",
+    "Patient ID": patientIdentifier,
+    Diagnosis: scan.diagnosis || scan.finalLabel || scan.result || "N/A",
     Confidence: `${Number(scan.confidence || 0).toFixed(2)}%`,
-    Priority: severityToPriority(scan),
-    Verified: scan.verified ? "Yes" : scan.reviewStatus === "verified" ? "Yes" : "No",
-    "Reviewed By": scan.reviewedBy || scan.verifiedBy || "N/A",
+    "Risk Level": scan.riskLevel || scan.severity || severityToPriority(scan),
+    "Doctor Verified": scan.verified || scan.reviewStatus === "verified" ? "Yes" : "No",
+    Notes: scan.doctorNotes || "",
   }));
 
-  const summaryCsv = Papa.unparse(summaryRows, { header: false });
-  const historyCsv = Papa.unparse(historyRows, {
-    columns: ["Date", "Diagnosis", "Severity", "Confidence", "Priority", "Verified", "Reviewed By"],
+  const csvContent = Papa.unparse(exportRows, {
+    columns: [
+      "Scan ID",
+      "Date",
+      "Patient ID",
+      "Diagnosis",
+      "Confidence",
+      "Risk Level",
+      "Doctor Verified",
+      "Notes",
+    ],
   });
-  const csvContent = `Patient Summary\n${summaryCsv}\n\nScan History\n${historyCsv}`;
 
   const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);

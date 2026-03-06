@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
+import ReCaptchaWidget from "@/components/ReCaptchaWidget";
+import { verifyCaptchaToken } from "@/lib/captcha";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -12,17 +14,38 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState("");
+  const [captchaResetKey, setCaptchaResetKey] = useState(0);
+
+  const resetCaptcha = () => {
+    setCaptchaToken("");
+    setCaptchaResetKey((previous) => previous + 1);
+  };
 
   const handleSubmit = async (event) => {
     event.preventDefault();
     setError("");
+
+    if (!captchaToken) {
+      setError("Please complete the CAPTCHA challenge.");
+      return;
+    }
+
     setLoading(true);
+    let loginSucceeded = false;
 
     try {
+      const captchaResult = await verifyCaptchaToken(captchaToken, "login");
+      if (!captchaResult.ok) {
+        setError(captchaResult.error);
+        return;
+      }
+
       const credential = await signInWithEmailAndPassword(auth, email.trim(), password);
       await credential.user.reload();
 
       if (!credential.user.emailVerified) {
+        loginSucceeded = true;
         router.push("/verify-email");
         return;
       }
@@ -35,25 +58,32 @@ export default function LoginPage() {
 
       const profile = userSnapshot.data();
       if (profile.role === "admin") {
+        loginSucceeded = true;
         router.push("/admin/dashboard");
         return;
       }
 
       if (profile.role === "doctor") {
         if (profile.approvalStatus !== "approved") {
+          loginSucceeded = true;
           router.push("/doctor/pending-approval");
           return;
         }
 
+        loginSucceeded = true;
         router.push("/");
         return;
       }
 
+      loginSucceeded = true;
       router.push("/");
     } catch (loginError) {
       setError(loginError?.message || "Login failed. Please try again.");
     } finally {
       setLoading(false);
+      if (!loginSucceeded) {
+        resetCaptcha();
+      }
     }
   };
 
@@ -92,11 +122,13 @@ export default function LoginPage() {
             />
           </label>
 
+          <ReCaptchaWidget onTokenChange={setCaptchaToken} resetKey={captchaResetKey} />
+
           {error ? <p className="text-red-500 text-sm">{error}</p> : null}
 
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || !captchaToken}
             className="w-full rounded-lg px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-60"
           >
             {loading ? "Signing in..." : "Sign In"}

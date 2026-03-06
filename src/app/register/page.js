@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { createUserWithEmailAndPassword, sendEmailVerification } from "firebase/auth";
 import { doc, serverTimestamp, setDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
+import ReCaptchaWidget from "@/components/ReCaptchaWidget";
+import { verifyCaptchaToken } from "@/lib/captcha";
 
 function generateSystemId() {
   const year = new Date().getFullYear();
@@ -26,6 +28,13 @@ export default function RegisterPage() {
   });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState("");
+  const [captchaResetKey, setCaptchaResetKey] = useState(0);
+
+  const resetCaptcha = () => {
+    setCaptchaToken("");
+    setCaptchaResetKey((previous) => previous + 1);
+  };
 
   const updateField = (field, value) => {
     setForm((previous) => ({ ...previous, [field]: value }));
@@ -54,11 +63,23 @@ export default function RegisterPage() {
       return;
     }
 
+    if (!captchaToken) {
+      setError("Please complete the CAPTCHA challenge.");
+      return;
+    }
+
     const safeRole = form.role === "doctor" ? "doctor" : "patient";
 
     setLoading(true);
+    let registrationSucceeded = false;
 
     try {
+      const captchaResult = await verifyCaptchaToken(captchaToken, "register");
+      if (!captchaResult.ok) {
+        setError(captchaResult.error);
+        return;
+      }
+
       const credential = await createUserWithEmailAndPassword(auth, email, form.password);
       await sendEmailVerification(credential.user);
 
@@ -75,11 +96,15 @@ export default function RegisterPage() {
         createdAt: serverTimestamp(),
       });
 
+      registrationSucceeded = true;
       router.push("/verify-email");
     } catch (registrationError) {
       setError(registrationError?.message || "Registration failed. Please try again.");
     } finally {
       setLoading(false);
+      if (!registrationSucceeded) {
+        resetCaptcha();
+      }
     }
   };
 
@@ -165,11 +190,13 @@ export default function RegisterPage() {
             </label>
           )}
 
+          <ReCaptchaWidget onTokenChange={setCaptchaToken} resetKey={captchaResetKey} />
+
           {error ? <p className="text-red-500 text-sm">{error}</p> : null}
 
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || !captchaToken}
             className="w-full rounded-lg px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-60"
           >
             {loading ? "Creating account..." : "Create Account"}

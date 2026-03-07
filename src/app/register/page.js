@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createUserWithEmailAndPassword, sendEmailVerification } from "firebase/auth";
-import { doc, serverTimestamp, setDoc } from "firebase/firestore";
+import { createUserWithEmailAndPassword, onAuthStateChanged, sendEmailVerification } from "firebase/auth";
+import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import ReCaptchaWidget from "@/components/ReCaptchaWidget";
 import { verifyCaptchaToken } from "@/lib/captcha";
@@ -16,6 +16,37 @@ function generateSystemId() {
 
 export default function RegisterPage() {
   const router = useRouter();
+  const [sessionChecking, setSessionChecking] = useState(true);
+
+  useEffect(() => {
+    let isUnmounted = false;
+
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      try {
+        if (!currentUser) return;
+
+        await currentUser.reload();
+        if (!currentUser.emailVerified) {
+          router.replace("/verify-email");
+          return;
+        }
+
+        const userSnapshot = await getDoc(doc(db, "users", currentUser.uid));
+        if (!userSnapshot.exists()) return;
+
+        router.replace("/");
+      } catch {
+        // Stay on register if check fails
+      } finally {
+        if (!isUnmounted) setSessionChecking(false);
+      }
+    });
+
+    return () => {
+      isUnmounted = true;
+      unsubscribe();
+    };
+  }, [router]);
 
   const [form, setForm] = useState({
     firstName: "",
@@ -97,9 +128,16 @@ export default function RegisterPage() {
       });
 
       registrationSucceeded = true;
-      router.push("/verify-email");
+      router.replace("/verify-email");
     } catch (registrationError) {
-      setError(registrationError?.message || "Registration failed. Please try again.");
+      const code = registrationError?.code || "";
+      const friendlyMessages = {
+        "auth/email-already-in-use": "An account with this email already exists.",
+        "auth/weak-password": "Password is too weak. Use at least 6 characters.",
+        "auth/invalid-email": "Please enter a valid email address.",
+        "auth/too-many-requests": "Too many attempts. Please try again later.",
+      };
+      setError(friendlyMessages[code] || "Registration failed. Please try again.");
     } finally {
       setLoading(false);
       if (!registrationSucceeded) {
@@ -108,7 +146,7 @@ export default function RegisterPage() {
     }
   };
 
-  return (
+  const formContent = (
     <main className="min-h-screen bg-slate-100 flex items-center justify-center p-6">
       <section className="w-full max-w-xl bg-white rounded-2xl shadow-md p-8">
         <h1 className="text-2xl font-bold text-slate-900">Create your DFU-Detect account</h1>
@@ -201,8 +239,25 @@ export default function RegisterPage() {
           >
             {loading ? "Creating account..." : "Create Account"}
           </button>
+
+          <p className="text-sm text-center text-slate-600">
+            Already have an account?{" "}
+            <button type="button" onClick={() => router.push("/login")} className="text-blue-600 hover:text-blue-700 font-medium">
+              Sign In
+            </button>
+          </p>
         </form>
       </section>
     </main>
   );
+
+  if (sessionChecking) {
+    return (
+      <main className="min-h-screen bg-slate-100 flex items-center justify-center p-6">
+        <p className="text-slate-600">Checking session...</p>
+      </main>
+    );
+  }
+
+  return formContent;
 }

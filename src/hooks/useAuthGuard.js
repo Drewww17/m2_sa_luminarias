@@ -46,9 +46,9 @@ export function useAuthGuard(options = {}) {
           if (userProfile.role === "admin") {
             router.replace("/admin/dashboard");
           } else if (userProfile.role === "doctor") {
-            router.replace("/doctor/dashboard");
+            router.replace("/");
           } else {
-            router.replace("/patient/dashboard");
+            router.replace("/");
           }
           setLoading(false);
           return;

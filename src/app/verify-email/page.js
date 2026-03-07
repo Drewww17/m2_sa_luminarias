@@ -73,7 +73,7 @@ export default function VerifyEmailPage() {
 
       await auth.currentUser.reload();
       if (auth.currentUser.emailVerified) {
-        router.replace("/login");
+        router.replace("/");
         return;
       }
 

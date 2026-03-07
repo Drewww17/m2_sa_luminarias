@@ -55,11 +55,11 @@ export default function LoginPage() {
             return;
           }
 
-          router.replace("/doctor/dashboard");
+          router.replace("/");
           return;
         }
 
-        router.replace("/patient/dashboard");
+        router.replace("/");
       } catch {
         // Leave user on login when auth/session checks fail.
       } finally {
@@ -129,14 +129,23 @@ export default function LoginPage() {
         }
 
         loginSucceeded = true;
-        router.replace("/doctor/dashboard");
+        router.replace("/");
         return;
       }
 
       loginSucceeded = true;
-      router.replace("/patient/dashboard");
+      router.replace("/");
     } catch (loginError) {
-      setError(loginError?.message || "Login failed. Please try again.");
+      const code = loginError?.code || "";
+      const friendlyMessages = {
+        "auth/wrong-password": "Incorrect password. Please try again.",
+        "auth/invalid-credential": "Invalid email or password. Please try again.",
+        "auth/user-not-found": "No account found with this email.",
+        "auth/too-many-requests": "Too many failed attempts. Please try again later.",
+        "auth/user-disabled": "This account has been disabled. Contact support.",
+        "auth/invalid-email": "Please enter a valid email address.",
+      };
+      setError(friendlyMessages[code] || "Login failed. Please try again.");
     } finally {
       setLoading(false);
       if (!loginSucceeded) {
@@ -207,6 +216,13 @@ export default function LoginPage() {
           >
             Forgot Password?
           </button>
+
+          <p className="text-sm text-center text-slate-600">
+            Don&apos;t have an account?{" "}
+            <button type="button" onClick={() => router.push("/register")} className="text-blue-600 hover:text-blue-700 font-medium">
+              Sign Up
+            </button>
+          </p>
         </form>
 
         <div className="mt-8 border-t border-slate-200 pt-4 text-center text-xs text-slate-500">

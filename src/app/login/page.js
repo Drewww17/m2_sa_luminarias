@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { signInWithEmailAndPassword, signOut } from "firebase/auth";
+import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import ReCaptchaWidget from "@/components/ReCaptchaWidget";
@@ -14,8 +14,66 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [sessionChecking, setSessionChecking] = useState(true);
   const [captchaToken, setCaptchaToken] = useState("");
   const [captchaResetKey, setCaptchaResetKey] = useState(0);
+
+  useEffect(() => {
+    let isUnmounted = false;
+
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      let shouldStopChecking = true;
+
+      try {
+        if (!currentUser) {
+          return;
+        }
+
+        await currentUser.reload();
+        if (!currentUser.emailVerified) {
+          shouldStopChecking = false;
+          router.replace("/verify-email");
+          return;
+        }
+
+        const userSnapshot = await getDoc(doc(db, "users", currentUser.uid));
+        if (!userSnapshot.exists()) {
+          await signOut(auth);
+          return;
+        }
+
+        const profile = userSnapshot.data();
+        shouldStopChecking = false;
+        if (profile.role === "admin") {
+          router.replace("/admin/dashboard");
+          return;
+        }
+
+        if (profile.role === "doctor") {
+          if (profile.approvalStatus !== "approved") {
+            router.replace("/doctor/pending-approval");
+            return;
+          }
+
+          router.replace("/doctor/dashboard");
+          return;
+        }
+
+        router.replace("/patient/dashboard");
+      } catch {
+        // Leave user on login when auth/session checks fail.
+      } finally {
+        if (!isUnmounted && shouldStopChecking) {
+          setSessionChecking(false);
+        }
+      }
+    });
+
+    return () => {
+      isUnmounted = true;
+      unsubscribe();
+    };
+  }, [router]);
 
   const resetCaptcha = () => {
     setCaptchaToken("");
@@ -46,7 +104,7 @@ export default function LoginPage() {
 
       if (!credential.user.emailVerified) {
         loginSucceeded = true;
-        router.push("/verify-email");
+        router.replace("/verify-email");
         return;
       }
 
@@ -59,24 +117,24 @@ export default function LoginPage() {
       const profile = userSnapshot.data();
       if (profile.role === "admin") {
         loginSucceeded = true;
-        router.push("/admin/dashboard");
+        router.replace("/admin/dashboard");
         return;
       }
 
       if (profile.role === "doctor") {
         if (profile.approvalStatus !== "approved") {
           loginSucceeded = true;
-          router.push("/doctor/pending-approval");
+          router.replace("/doctor/pending-approval");
           return;
         }
 
         loginSucceeded = true;
-        router.push("/");
+        router.replace("/doctor/dashboard");
         return;
       }
 
       loginSucceeded = true;
-      router.push("/");
+      router.replace("/patient/dashboard");
     } catch (loginError) {
       setError(loginError?.message || "Login failed. Please try again.");
     } finally {
@@ -86,6 +144,14 @@ export default function LoginPage() {
       }
     }
   };
+
+  if (sessionChecking) {
+    return (
+      <main className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+        <p className="text-slate-600">Checking session...</p>
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen bg-slate-50 flex items-center justify-center p-6">

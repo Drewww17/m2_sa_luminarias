@@ -11,6 +11,20 @@ export default function VerifyEmailPage() {
   const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
 
+  const getFriendlyErrorMessage = (sourceError, fallbackMessage) => {
+    const errorCode = sourceError?.code;
+    const errorMessage = sourceError?.message || "";
+
+    if (
+      errorCode === "auth/too-many-requests" ||
+      errorMessage.includes("auth/too-many-requests")
+    ) {
+      return "Please check your spam folder for the verification email.";
+    }
+
+    return sourceError?.message || fallbackMessage;
+  };
+
   useEffect(() => {
     const currentUser = auth.currentUser;
     if (!currentUser) {
@@ -36,7 +50,12 @@ export default function VerifyEmailPage() {
       await sendEmailVerification(auth.currentUser);
       setSuccess("Verification email sent. Please check your inbox.");
     } catch (verificationError) {
-      setError(verificationError?.message || "Failed to resend verification email.");
+      setError(
+        getFriendlyErrorMessage(
+          verificationError,
+          "Failed to resend verification email.",
+        ),
+      );
     } finally {
       setLoading(false);
     }
@@ -60,7 +79,9 @@ export default function VerifyEmailPage() {
 
       setSuccess("Email not verified yet. Please verify and try again.");
     } catch (statusError) {
-      setError(statusError?.message || "Unable to check verification status.");
+      setError(
+        getFriendlyErrorMessage(statusError, "Unable to check verification status."),
+      );
     } finally {
       setLoading(false);
     }

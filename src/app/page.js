@@ -74,6 +74,7 @@ export default function App() {
  
   const [scanImage, setScanImage] = useState(null);
   const [analysisResult, setAnalysisResult] = useState(null);
+  const [searchTerm, setSearchTerm] = useState("");
 
   useEffect(() => {
     const savedTheme = localStorage.getItem("dfu-theme");
@@ -297,12 +298,13 @@ export default function App() {
           navigate={navigate}
           history={userData?.role === 'doctor' ? allScans : scanHistory}
           userData={userData}
+          searchTerm={searchTerm}
         />
       )}
       {route === 'education' && <EducationHub navigate={navigate} />}
 
       {(route === 'doctor-dashboard' || route === 'clinical-overview' || route === 'patient-cumulative') && (
-        <DoctorDashboard navigate={navigate} allScans={allScans} />
+        <DoctorDashboard navigate={navigate} allScans={allScans} searchTerm={searchTerm} />
       )}
 
       {route === 'patient-records' && (
@@ -312,6 +314,7 @@ export default function App() {
           userData={userData}
           loading={doctorScansLoading}
           error={doctorScansError}
+          searchTerm={searchTerm}
           onSelectPatient={(id) => {
             setSelectedPatientId(id);
             navigate('patient-detail');
@@ -339,7 +342,7 @@ export default function App() {
       {!isPortalUser ? <Navbar route={route} userData={userData} navigate={navigate} onLogout={handleLogout} /> : null}
 
       {isPortalUser ? (
-        <HealthcareShell route={route} userData={userData} navigate={navigate} onLogout={handleLogout}>
+        <HealthcareShell route={route} userData={userData} navigate={navigate} onLogout={handleLogout} searchTerm={searchTerm} setSearchTerm={setSearchTerm}>
           {routeContent}
         </HealthcareShell>
       ) : (
@@ -429,7 +432,7 @@ const Navbar = ({ route, userData, navigate, onLogout }) => {
   );
 };
 
-const HealthcareShell = ({ route, userData, navigate, onLogout, children }) => {
+const HealthcareShell = ({ route, userData, navigate, onLogout, children, searchTerm, setSearchTerm }) => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const baseItems = [
@@ -521,14 +524,18 @@ const HealthcareShell = ({ route, userData, navigate, onLogout, children }) => {
               </button>
               <h1 className="text-lg font-semibold text-slate-900">DFU-Detect</h1>
             </div>
-            <div className="hidden sm:block flex-1 max-w-xl relative">
-              <Search className="h-4 w-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                placeholder="Search patients"
-                className="w-full rounded-xl border border-slate-200 pl-9 pr-3 py-2 text-sm focus:ring-2 focus:ring-blue-600 focus:border-blue-600"
-              />
-            </div>
+            {userData?.role === "doctor" && (
+              <div className="hidden sm:block flex-1 max-w-xl relative">
+                <Search className="h-4 w-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  placeholder="Search patients"
+                  className="w-full rounded-xl border border-slate-200 pl-9 pr-3 py-2 text-sm focus:ring-2 focus:ring-blue-600 focus:border-blue-600"
+                />
+              </div>
+            )}
             <div className="flex items-center gap-2 sm:gap-3">
               <button type="button" onClick={() => handleNav('settings')} className="h-9 w-9 sm:h-10 sm:w-10 rounded-full bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-700 hover:bg-blue-100 transition-colors">
                 <User className="h-5 w-5" />
@@ -536,14 +543,18 @@ const HealthcareShell = ({ route, userData, navigate, onLogout, children }) => {
             </div>
           </div>
 
-          <div className="sm:hidden mt-3 relative">
-            <Search className="h-4 w-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              placeholder="Search patients"
-              className="w-full rounded-xl border border-slate-200 pl-9 pr-3 py-2 text-sm focus:ring-2 focus:ring-blue-600 focus:border-blue-600"
-            />
-          </div>
+          {userData?.role === "doctor" && (
+            <div className="sm:hidden mt-3 relative">
+              <Search className="h-4 w-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search patients"
+                className="w-full rounded-xl border border-slate-200 pl-9 pr-3 py-2 text-sm focus:ring-2 focus:ring-blue-600 focus:border-blue-600"
+              />
+            </div>
+          )}
         </header>
 
         <main className="p-4 sm:p-6">{children}</main>
@@ -706,9 +717,13 @@ const PatientDashboard = ({ navigate, history, userData }) => (
   </div>
 );
 
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"];
+
 const NewScanPage = ({ navigate, setAnalysisResult, setScanImage, userData }) => {
   const [analyzing, setAnalyzing] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
+  const [scanError, setScanError] = useState("");
   const fileInputRef = useRef(null);
   const [useWebcam, setUseWebcam] = useState(false);
   const webcamRef = useRef(null);
@@ -726,9 +741,33 @@ const NewScanPage = ({ navigate, setAnalysisResult, setScanImage, userData }) =>
     );
   };
 
+  const validateFile = (file) => {
+    if (!file) return "No file selected.";
+    if (!ALLOWED_TYPES.includes(file.type)) return "Unsupported file type. Please upload a JPEG, PNG, or WebP image.";
+    if (file.size > MAX_FILE_SIZE) return "File is too large. Maximum size is 10 MB.";
+    return null;
+  };
+
+  const handleFileSelect = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const error = validateFile(file);
+    if (error) {
+      setScanError(error);
+      setSelectedFile(null);
+      return;
+    }
+    setScanError("");
+    setSelectedFile(file);
+  };
+
   const handleAnalyze = async () => {
     if (!selectedFile) return;
-    
+    const fileError = validateFile(selectedFile);
+    if (fileError) { setScanError(fileError); return; }
+    if (selectedModels.length === 0) { setScanError("Please select at least one AI model."); return; }
+
+    setScanError("");
     const previewUrl = URL.createObjectURL(selectedFile);
     setScanImage(previewUrl);
     setAnalyzing(true);
@@ -739,23 +778,36 @@ const NewScanPage = ({ navigate, setAnalysisResult, setScanImage, userData }) =>
 
     try {
       const response = await fetch('/api/analyze', { method: 'POST', body: formData });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        setScanError(errorData?.error || `Server error (${response.status}). Please try again.`);
+        setAnalyzing(false);
+        return;
+      }
+
       const data = await response.json();
       
       if (data.status === 'success') {
+        if (data.warnings?.length) {
+          console.warn("Analysis warnings:", data.warnings);
+        }
         setAnalysisResult(data);
         navigate(userData?.role === 'doctor' ? 'scan-results-doctor' : 'scan-results-patient');
       } else {
-        alert('Analysis failed: ' + (data.error || 'Unknown error'));
+        setScanError(data.error || 'Analysis failed. Please try again with a different image.');
       }
     } catch (error) {
       console.error(error);
-      alert('Error connecting to analysis server.');
+      setScanError('Unable to connect to the analysis server. Check your internet connection and try again.');
     } finally {
       setAnalyzing(false);
     }
   };
 
   const analyzeWebcam = async (base64Image) => {
+    if (selectedModels.length === 0) { setScanError("Please select at least one AI model."); return; }
+    setScanError("");
     setAnalyzing(true);
     setScanImage(base64Image);
 
@@ -769,15 +821,26 @@ const NewScanPage = ({ navigate, setAnalysisResult, setScanImage, userData }) =>
         })
       });
 
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        setScanError(errorData?.error || `Server error (${response.status}). Please try again.`);
+        setAnalyzing(false);
+        return;
+      }
+
       const data = await response.json();
       if (data.status === 'success') {
+        if (data.warnings?.length) {
+          console.warn("Analysis warnings:", data.warnings);
+        }
         setAnalysisResult(data);
         navigate(userData?.role === 'doctor' ? 'scan-results-doctor' : 'scan-results-patient');
       } else {
-        alert('Analysis failed: ' + (data.error || 'Unknown error'));
+        setScanError(data.error || 'Analysis failed. Please try a clearer photo.');
       }
     } catch (err) {
-      alert("Webcam analysis failed");
+      console.error(err);
+      setScanError("Webcam analysis failed. Check your connection and try again.");
     }
 
     setAnalyzing(false);
@@ -835,9 +898,15 @@ const NewScanPage = ({ navigate, setAnalysisResult, setScanImage, userData }) =>
           <button
             type="button"
             onClick={() => {
-              const imageSrc = webcamRef.current.getScreenshot();
-              if (imageSrc) {
-                analyzeWebcam(imageSrc);
+              try {
+                const imageSrc = webcamRef.current?.getScreenshot();
+                if (imageSrc) {
+                  analyzeWebcam(imageSrc);
+                } else {
+                  setScanError("Failed to capture image. Make sure your camera is working and try again.");
+                }
+              } catch (e) {
+                setScanError("Camera error. Please check permissions and reload the page.");
               }
             }}
             disabled={analyzing || selectedModels.length === 0}
@@ -852,7 +921,7 @@ const NewScanPage = ({ navigate, setAnalysisResult, setScanImage, userData }) =>
             className="bg-white border-2 border-dashed border-slate-300 rounded-3xl p-8 sm:p-16 flex flex-col items-center justify-center text-center hover:bg-slate-50 cursor-pointer"
             onClick={() => fileInputRef.current.click()}
           >
-            <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={(e) => setSelectedFile(e.target.files[0])} />
+            <input type="file" ref={fileInputRef} className="hidden" accept="image/jpeg,image/png,image/webp" onChange={handleFileSelect} />
             
             {selectedFile ? (
               <div>
@@ -878,6 +947,19 @@ const NewScanPage = ({ navigate, setAnalysisResult, setScanImage, userData }) =>
             </button>
           </div>
         </>
+      )}
+
+      {scanError && (
+        <div className="flex items-start gap-3 bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm">
+          <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold">Scan Error</p>
+            <p>{scanError}</p>
+          </div>
+          <button type="button" onClick={() => setScanError("")} className="ml-auto text-red-400 hover:text-red-600">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       )}
 
       <div className="text-xs text-slate-500 mt-4 text-center bg-slate-50 p-3 rounded-lg border border-slate-100">
@@ -986,6 +1068,7 @@ const BoundingBoxVisualization = ({ image, predictions = [], imageMeta }) => {
 };
 
 const ScanResultsPatient = ({ navigate, result, image, history, onSave, userData }) => {
+
   if (!result) return null;
 
   const lastScan = history[0];
@@ -1031,9 +1114,20 @@ const ScanResultsPatient = ({ navigate, result, image, history, onSave, userData
   const riskLevel = result.severity || "Low";
   const riskClass = riskLevel === "High" ? "text-red-500" : riskLevel === "Moderate" ? "text-amber-500" : "text-emerald-500";
 
+  // Show warning if no bounding boxes and confidence is 0
+  const showUnrelatedWarning = (confidence === 0) && (!result.predictions || result.predictions.length === 0);
+
   return (
     <div className="max-w-6xl mx-auto py-2 grid grid-cols-1 lg:grid-cols-5 gap-6">
       <div className="lg:col-span-3">
+        {showUnrelatedWarning && (
+          <div className="mb-4 bg-yellow-50 border border-yellow-300 text-yellow-800 rounded-xl px-4 py-3 text-sm flex items-center gap-2">
+            <AlertCircle className="h-5 w-5 shrink-0" />
+            <span>
+              This image does not appear to be a valid foot scan. No features were detected and confidence is 0%. Please choose another image.
+            </span>
+          </div>
+        )}
         <BoundingBoxVisualization image={image} predictions={result.predictions || []} imageMeta={result.imageMeta} />
       </div>
 
@@ -1066,9 +1160,20 @@ const ScanResultsPatient = ({ navigate, result, image, history, onSave, userData
   );
 };
 
-const MyHistoryPage = ({ navigate, history, userData }) => {
+const MyHistoryPage = ({ navigate, history, userData, searchTerm = "" }) => {
   const [exportFilter, setExportFilter] = useState("all");
   const isDoctorView = userData?.role === "doctor";
+
+  const filteredHistory = useMemo(() => {
+    if (!isDoctorView || !searchTerm.trim()) return history;
+    const term = searchTerm.toLowerCase();
+    return history.filter((item) =>
+      (item.patientName || "").toLowerCase().includes(term) ||
+      (item.userId || "").toLowerCase().includes(term) ||
+      (item.result || "").toLowerCase().includes(term) ||
+      (item.dateString || "").toLowerCase().includes(term)
+    );
+  }, [history, searchTerm, isDoctorView]);
 
   const handleExportCsv = () => {
     if (!userData) return;
@@ -1104,7 +1209,7 @@ const MyHistoryPage = ({ navigate, history, userData }) => {
       </div>
 
       <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-lg hover:shadow-xl transition-shadow duration-300">
-        {history.length > 0 ? (
+        {filteredHistory.length > 0 ? (
           <div className="overflow-x-auto">
           <table className="w-full text-sm text-left divide-y divide-slate-200">
             <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-100 text-xs uppercase">
@@ -1116,7 +1221,7 @@ const MyHistoryPage = ({ navigate, history, userData }) => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {history.map((item) => (
+              {filteredHistory.map((item) => (
                 <tr key={item.id} className="hover:bg-slate-50 transition-colors duration-150">
                   <td className="px-4 sm:px-8 py-4 sm:py-5 font-bold text-slate-700">{item.dateString || "N/A"}</td>
                   {isDoctorView ? <td className="px-4 sm:px-8 py-4 sm:py-5 text-slate-700">{item.patientName || "N/A"}</td> : null}
@@ -1127,7 +1232,7 @@ const MyHistoryPage = ({ navigate, history, userData }) => {
             </tbody>
           </table>
           </div>
-        ) : <div className="p-8 text-center text-slate-500">{isDoctorView ? "No scans found yet." : "No history found."}</div>}
+        ) : <div className="p-8 text-center text-slate-500">{isDoctorView && searchTerm.trim() ? "No matching scans found." : isDoctorView ? "No scans found yet." : "No history found."}</div>}
       </div>
     </div>
   );
@@ -1144,15 +1249,25 @@ const KPICard = ({ title, value, icon: Icon, color }) => (
   </div>
 );
 
-const DoctorDashboard = ({ allScans }) => {
+const DoctorDashboard = ({ allScans, searchTerm = "" }) => {
+  const filteredAllScans = useMemo(() => {
+    if (!searchTerm.trim()) return allScans;
+    const term = searchTerm.toLowerCase();
+    return allScans.filter((scan) =>
+      (scan.patientName || "").toLowerCase().includes(term) ||
+      (scan.userId || "").toLowerCase().includes(term) ||
+      (scan.diagnosis || scan.finalLabel || scan.result || "").toLowerCase().includes(term)
+    );
+  }, [allScans, searchTerm]);
+
   const sortedScans = useMemo(
     () =>
-      [...allScans].sort(
+      [...filteredAllScans].sort(
         (a, b) =>
           (b.createdAt?.seconds || 0) -
           (a.createdAt?.seconds || 0)
       ),
-    [allScans]
+    [filteredAllScans]
   );
 
   const metrics = useMemo(() => {
@@ -1371,7 +1486,7 @@ const EducationHub = () => {
   );
 };
 
-const PatientRecords = ({ allScans, userData, onSelectPatient, loading = false, error = "" }) => {
+const PatientRecords = ({ allScans, userData, onSelectPatient, loading = false, error = "", searchTerm = "" }) => {
   const [filter, setFilter] = useState("all");
 
   const handleVerify = async (scanId) => {
@@ -1408,8 +1523,15 @@ const PatientRecords = ({ allScans, userData, onSelectPatient, loading = false, 
   };
 
   const filteredScans = allScans.filter(scan => {
-    if (filter === "ulcer") return (scan.finalLabel || scan.result) === "Ulcer";
-    if (filter === "healthy") return (scan.finalLabel || scan.result) === "Healthy";
+    if (filter === "ulcer" && (scan.finalLabel || scan.result) !== "Ulcer") return false;
+    if (filter === "healthy" && (scan.finalLabel || scan.result) !== "Healthy") return false;
+    if (searchTerm.trim()) {
+      const term = searchTerm.toLowerCase();
+      const matchesName = (scan.patientName || "").toLowerCase().includes(term);
+      const matchesId = (scan.userId || "").toLowerCase().includes(term);
+      const matchesDiagnosis = (scan.diagnosis || scan.finalLabel || scan.result || "").toLowerCase().includes(term);
+      if (!matchesName && !matchesId && !matchesDiagnosis) return false;
+    }
     return true;
   });
 

@@ -60,41 +60,82 @@ export async function POST(request) {
 
     const ROBOFLOW_API_KEY = process.env.ROBOFLOW_API_KEY;
 
+    if (!ROBOFLOW_API_KEY) {
+      return NextResponse.json(
+        { status: "error", error: "Analysis service is not configured. Contact the administrator." },
+        { status: 503 }
+      );
+    }
+
     // Run Multi-Model Inference
-    const results = await Promise.all(
+    const warnings = [];
+    const settledResults = await Promise.allSettled(
       activeModelConfigs.map(async (model) => {
-        const res = await fetch(
-          `https://detect.roboflow.com/${model.id}?api_key=${ROBOFLOW_API_KEY}`,
-          {
-            method: "POST",
-            body: base64Image,
-            headers: { "Content-Type": "application/x-www-form-urlencoded" }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30000);
+
+        try {
+          const res = await fetch(
+            `https://detect.roboflow.com/${model.id}?api_key=${ROBOFLOW_API_KEY}`,
+            {
+              method: "POST",
+              body: base64Image,
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              signal: controller.signal,
+            }
+          );
+          clearTimeout(timeout);
+
+          if (!res.ok) {
+            const errText = await res.text().catch(() => "Unknown error");
+            throw new Error(`Model ${model.id} returned ${res.status}: ${errText}`);
           }
-        );
 
-        const data = await res.json();
+          const data = await res.json();
 
-        const maxConfidence = data.predictions?.length
-          ? Math.max(...data.predictions.map(p => p.confidence))
-          : 0;
+          const maxConfidence = data.predictions?.length
+            ? Math.max(...data.predictions.map(p => p.confidence))
+            : 0;
 
-        return {
-          model: model.id,
-          weight: model.weight,
-          prediction: data.predictions?.length ? "Ulcer" : "Healthy",
-          confidence: Number((maxConfidence * 100).toFixed(2)),
-          predictions: (data.predictions || []).map((prediction) => ({
-            x: prediction.x,
-            y: prediction.y,
-            width: prediction.width,
-            height: prediction.height,
-            class: prediction.class,
-            confidence: Number(((prediction.confidence || 0) * 100).toFixed(2)),
-          })),
-          imageMeta: data.image
-        };
+          return {
+            model: model.id,
+            weight: model.weight,
+            prediction: data.predictions?.length ? "Ulcer" : "Healthy",
+            confidence: Number((maxConfidence * 100).toFixed(2)),
+            predictions: (data.predictions || []).map((prediction) => ({
+              x: prediction.x,
+              y: prediction.y,
+              width: prediction.width,
+              height: prediction.height,
+              class: prediction.class,
+              confidence: Number(((prediction.confidence || 0) * 100).toFixed(2)),
+            })),
+            imageMeta: data.image
+          };
+        } catch (modelError) {
+          clearTimeout(timeout);
+          throw modelError;
+        }
       })
     );
+
+    const results = [];
+    for (const settled of settledResults) {
+      if (settled.status === "fulfilled") {
+        results.push(settled.value);
+      } else {
+        const reason = settled.reason?.message || "Unknown model error";
+        console.error("Model inference failed:", reason);
+        warnings.push(reason);
+      }
+    }
+
+    if (results.length === 0) {
+      return NextResponse.json(
+        { status: "error", error: "All models failed to process the image. Please try again or use a different image." },
+        { status: 502 }
+      );
+    }
 
     const topPredictionModel = [...results].sort((a, b) => b.confidence - a.confidence)[0] || null;
 
@@ -161,12 +202,21 @@ export async function POST(request) {
       recommendation,
       predictions: topPredictionModel?.predictions || [],
       imageMeta: topPredictionModel?.imageMeta || null,
+      warnings,
     });
 
   } catch (error) {
     console.error("Server error:", error);
+
+    let message = "An unexpected error occurred while processing your scan.";
+    if (error.name === "AbortError") {
+      message = "Analysis timed out. The image may be too large or the server is busy. Please try again.";
+    } else if (error.message?.includes("JSON")) {
+      message = "Invalid image data received. Please upload a valid image file.";
+    }
+
     return NextResponse.json(
-      { error: "Server error" },
+      { status: "error", error: message },
       { status: 500 }
     );
   }

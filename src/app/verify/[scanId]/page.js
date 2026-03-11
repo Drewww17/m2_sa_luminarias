@@ -19,13 +19,18 @@ export default function VerifyScanPage({ params }) {
       setNotFound(false);
 
       try {
-        // Try "scans" collection first, then "reportVerifications" as fallback
-        let snapshot = await getDoc(doc(db, "scans", scanId));
-        if (!snapshot.exists()) {
+        // Try "scans" collection first. If that read is denied (permissions),
+        // fall back to the public `reportVerifications` collection.
+        let snapshot = null;
+        try {
+          snapshot = await getDoc(doc(db, "scans", scanId));
+        } catch (readErr) {
+          // Likely a permissions error for protected scans — try the public backup
+          console.warn("Unable to read from scans (will try reportVerifications):", readErr);
           snapshot = await getDoc(doc(db, "reportVerifications", scanId));
         }
 
-        if (!snapshot.exists()) {
+        if (!snapshot || !snapshot.exists()) {
           setNotFound(true);
           setLoading(false);
           return;

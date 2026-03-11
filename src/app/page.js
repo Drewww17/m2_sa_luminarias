@@ -44,7 +44,8 @@ import {
   serverTimestamp,
   doc,
   getDoc,
-  updateDoc
+  updateDoc,
+  setDoc
 } from "firebase/firestore";
 import { logAuditAction } from "@/lib/auditLogs";
 import { generateScanHash } from "@/utils/hashGenerator";
@@ -83,6 +84,49 @@ export default function App() {
     }
   }, []);
 
+  // --- 2. DATA FETCHING (Real-time) ---
+  useEffect(() => {
+    if (!user || !userData) return;
+
+    // PATIENT: Fetch own history
+    if (userData.role === 'patient') {
+      const q = query(
+        collection(db, 'scans'),
+        where('userId', '==', user.uid)
+      );
+
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        const scans = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        scans.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+        setScanHistory(scans);
+      }, (error) => console.error('Error fetching history:', error));
+
+      return () => unsubscribe();
+    }
+
+    // DOCTOR: Fetch all patients and scans
+    if (userData.role === 'doctor') {
+      const scansQuery = collection(db, 'scans');
+      const unsubScans = onSnapshot(
+        scansQuery,
+        (snapshot) => {
+          const scans = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+          scans.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+          setAllScans(scans);
+          setDoctorScansError('');
+          setDoctorScansLoading(false);
+        },
+        (error) => {
+          console.error('Error fetching doctor scans:', error);
+          setDoctorScansError('Failed to load patient records. Check Firestore rules and doctor approval status.');
+          setDoctorScansLoading(false);
+        }
+      );
+
+      return () => unsubScans();
+    }
+  }, [user, userData]);
+
   useEffect(() => {
     document.documentElement.classList.toggle("dark", isDarkMode);
     localStorage.setItem("dfu-theme", isDarkMode ? "dark" : "light");
@@ -114,71 +158,6 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // --- 2. DATA FETCHING (Real-time) ---
-  useEffect(() => {
-    if (!user || !userData) return;
-
-// PATIENT: Fetch own history
-    if (userData.role === 'patient') {
-      const q = query(
-        collection(db, 'scans'),
-        where('userId', '==', user.uid)
-      );
-      
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        const scans = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        scans.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
-        setScanHistory(scans);
-      }, (error) => console.error("Error fetching history:", error));
-      
-      return () => unsubscribe();
-    }
-
-    // DOCTOR: Fetch all patients and scans
-    if (userData.role === 'doctor') {
-      const scansQuery = collection(db, 'scans');
-      const unsubScans = onSnapshot(
-        scansQuery,
-        (snapshot) => {
-          const scans = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-          scans.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
-          setAllScans(scans);
-          setDoctorScansError("");
-          setDoctorScansLoading(false);
-        },
-        (error) => {
-          console.error("Error fetching doctor scans:", error);
-          setDoctorScansError("Failed to load patient records. Check Firestore rules and doctor approval status.");
-          setDoctorScansLoading(false);
-        }
-      );
-
-      return () => {
-        unsubScans();
-      };
-    }
-
-  }, [user, userData]);
-
-  // --- NAVIGATION ---
-  const navigate = (newRoute) => {
-    if (newRoute === "login") {
-      router.push("/login");
-      return;
-    }
-    if (newRoute === "signup") {
-      router.push("/register");
-      return;
-    }
-    if (newRoute === "admin-dashboard") {
-      router.push("/admin/dashboard");
-      return;
-    }
-
-    window.scrollTo(0, 0);
-    setRoute(newRoute);
-  };
-
   const handleLogout = async () => {
     await signOut(auth);
     setUserData(null);
@@ -206,6 +185,17 @@ export default function App() {
       };
       const resolvedScanId = overrides.scanId || resultData.scanId || resultData.id || null;
 
+
+      // Always generate scanHash from normalized values
+      const hashPayload = {
+        diagnosis,
+        confidence,
+        riskLevel,
+        systemVersion: SYSTEM_VERSION,
+        modelVersion: MODEL_VERSION,
+      };
+      const scanHash = generateScanHash(hashPayload);
+
       if (resolvedScanId) {
         await updateDoc(doc(db, 'scans', resolvedScanId), {
           finalLabel: overrides.finalLabel || (resultData.is_ulcer ? 'Ulcer' : 'Healthy'),
@@ -220,9 +210,9 @@ export default function App() {
           verifiedBy: overrides.verifiedBy || null,
           verifiedAt: overrides.verifiedAt || null,
           verificationTimestamp: overrides.verifiedAt || null,
+          scanHash,
         });
       } else {
-        const scanHash = generateScanHash(scanPayload);
         const newScan = {
           userId: user.uid,
           patientName: `${userData.firstName} ${userData.lastName}`,
@@ -263,6 +253,23 @@ export default function App() {
       alert("Failed to save record.");
       return null;
     }
+  };
+
+  const navigate = (newRoute) => {
+    if (newRoute === "login") {
+      router.push("/login");
+      return;
+    }
+    if (newRoute === "signup") {
+      router.push("/register");
+      return;
+    }
+    if (newRoute === "admin-dashboard") {
+      router.push("/admin/dashboard");
+      return;
+    }
+    window.scrollTo(0, 0);
+    setRoute(newRoute);
   };
 
   const isPortalUser = userData?.role === "patient" || userData?.role === "doctor";
@@ -1900,46 +1907,85 @@ const ScanResultsDoctor = ({ navigate, image, result, onSave, userData }) => {
 
   const handleAction = async (action) => {
     const currentUid = auth.currentUser?.uid;
-    if (currentUid && action === 'false_positive') {
-      logAuditAction({
-        action: "doctor_override",
-        performedBy: currentUid,
-        targetUser: currentUid,
-      });
-    }
-
-    const overrides = {
-      doctorNotes: notes,
-      verifiedBy: userData?.firstName || 'Doctor',
-      verifiedAt: serverTimestamp(),
-      verificationStatus: action === 'verify' ? 'verified' : action === 'false_positive' ? 'false_positive' : 'pending',
-      reviewStatus: action === 'verify' ? 'verified' : action === 'false_positive' ? 'false_positive' : 'pending',
-      scanId: savedScanId,
-      finalLabel: action === 'verify' ? result.consensus : action === 'false_positive' ? (result.consensus === 'Ulcer' ? 'Healthy' : 'Ulcer') : result.consensus
-    };
-
-    // If scan already exists in Firestore, just update verification fields (no hash change)
-    if (action === 'verify' && savedScanId) {
-      await updateDoc(doc(db, 'scans', savedScanId), {
-        verificationStatus: 'verified',
-        reviewStatus: 'verified',
-        reviewedBy: userData?.firstName || 'Doctor',
-        verifiedBy: userData?.firstName || 'Doctor',
-        verificationTimestamp: serverTimestamp(),
-        verifiedAt: serverTimestamp(),
-        doctorNotes: notes,
-      });
-      setLocalVerificationStatus('verified');
+    if (!currentUid) {
+      alert("Session expired. Please log in again.");
       return;
     }
 
-    // Otherwise save the scan first (creates new doc with hash), then track its ID
-    const newScanId = await onSave(result, overrides, { navigateOnSuccess: false });
-    if (newScanId) {
-      setSavedScanId(newScanId);
-      if (action === 'verify') {
-        setLocalVerificationStatus('verified');
+    try {
+      const overrides = {
+        verificationStatus: action === 'verify' ? 'verified' : action === 'false_positive' ? 'false_positive' : 'pending',
+        reviewStatus: action === 'verify' ? 'verified' : action === 'false_positive' ? 'false_positive' : 'pending',
+        finalLabel: action === 'false_positive' ? (result.consensus === 'Ulcer' ? 'Healthy' : 'Ulcer') : result.consensus,
+        doctorNotes: notes,
+        verifiedBy: userData?.firstName || 'Doctor',
+        verifiedAt: serverTimestamp(),
+        verificationTimestamp: serverTimestamp(),
+      };
+
+      // If scan exists, update it; otherwise create via onSave
+      let resultingScanId = savedScanId;
+      if (savedScanId) {
+        await updateDoc(doc(db, 'scans', savedScanId), overrides);
+      } else {
+        const newScanId = await onSave(result, overrides, { navigateOnSuccess: false });
+        if (!newScanId) {
+          alert('Failed to save scan for verification.');
+          return;
+        }
+        resultingScanId = newScanId;
+        setSavedScanId(newScanId);
       }
+
+      if (action === 'verify') setLocalVerificationStatus('verified');
+      if (action === 'false_positive') setLocalVerificationStatus('false_positive');
+
+        // Also write a public verification copy so verification links / PDFs can read it without auth
+        try {
+          const publicPayload = {
+            scanId: resultingScanId,
+            diagnosis: result.diagnosis || result.consensus,
+            confidence: Number(result.confidence) || 0,
+            riskLevel: result.severity || 'Low',
+            systemVersion: result.systemVersion || SYSTEM_VERSION,
+            modelVersion: result.modelVersion || MODEL_VERSION,
+            scanHash: generateScanHash({
+              diagnosis: result.diagnosis || result.consensus,
+              confidence: Number(result.confidence) || 0,
+              riskLevel: result.severity || 'Low',
+              systemVersion: result.systemVersion || SYSTEM_VERSION,
+              modelVersion: result.modelVersion || MODEL_VERSION,
+            }),
+            verificationStatus: overrides.verificationStatus,
+            reviewStatus: overrides.reviewStatus,
+            finalLabel: overrides.finalLabel || (result.consensus),
+            doctorNotes: overrides.doctorNotes || notes || '',
+            verifiedBy: overrides.verifiedBy || userData?.firstName || 'Doctor',
+            verifiedAt: overrides.verifiedAt || serverTimestamp(),
+            verificationTimestamp: overrides.verificationTimestamp || serverTimestamp(),
+            patientName: result.patientName || result.userName || null,
+            createdAt: serverTimestamp(),
+            dateString: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+          };
+
+          await setDoc(doc(db, 'reportVerifications', resultingScanId), publicPayload);
+        } catch (publicErr) {
+          console.warn('Failed to write public verification copy (non-critical):', publicErr);
+        }
+
+      try {
+        await logAuditAction({
+          action: action === 'verify' ? 'scan_verified' : action === 'false_positive' ? 'doctor_override' : 'scan_followup',
+          performedBy: currentUid,
+          targetUser: currentUid,
+          scanId: resultingScanId,
+        });
+      } catch (auditErr) {
+        console.warn('Audit log failed (non-critical):', auditErr);
+      }
+    } catch (err) {
+      console.error('Verification error:', err);
+      alert(`Verification failed: ${err.message}`);
     }
   };
 

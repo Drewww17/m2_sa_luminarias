@@ -1843,7 +1843,7 @@ const TestModel = () => {
       {/* Performance Metrics per Model */}
       {modelMetrics.map(m => (
         <div key={m.id} className={`bg-white p-6 rounded-2xl border shadow-sm ${!enabledModels[m.id] ? 'opacity-50' : ''}`}>
-          <h3 className="font-semibold text-lg text-slate-900 mb-4">YOLOv11 DFU Detector ({m.id})</h3>
+          <h3 className="font-semibold text-lg text-slate-900 mb-4">YOLOv Algorithm DFU Detector ({m.id})</h3>
           <div className="grid grid-cols-3 gap-4 sm:gap-6">
             <div>
               <p className="text-sm text-slate-500">mAP</p>
@@ -1863,7 +1863,7 @@ const TestModel = () => {
 
       <div className="bg-white p-6 rounded-2xl border shadow-lg hover:shadow-xl transition-shadow duration-300">
         <h3 className="font-semibold text-lg text-slate-900 mb-4">Model Details</h3>
-        <p className="text-slate-600">Model Name: YOLOv12 DFU Detector</p>
+        <p className="text-slate-600">Model Name: YOLOv Algorithm DFU Detector</p>
         <p className="text-slate-600">Version: {MODEL_VERSION}</p>
         <p className="text-slate-600">Precision: 91%</p>
         <p className="text-slate-600">Recall: 88%</p>

@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 
 const modelConfigs = [
-  { id: "foot-ulcers-szvdf/3", weight: 0.906 },
-  { id: "foot-ulcers-szvdf/2", weight: 0.914 },
-  { id: "foot-ulcers-szvdf/1", weight: 0.927 }
+  { id: "foot-ulcers-szvdf/3 - YOLOv26", weight: 0.906 },
+  { id: "foot-ulcers-szvdf/2 - YOLOv12", weight: 0.914 },
+  { id: "foot-ulcers-szvdf/1 - YOLOv11", weight: 0.927 }
 ];
 
 export async function POST(request) {

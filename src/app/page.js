@@ -735,9 +735,9 @@ const NewScanPage = ({ navigate, setAnalysisResult, setScanImage, userData }) =>
   const [useWebcam, setUseWebcam] = useState(false);
   const webcamRef = useRef(null);
   const [selectedModels, setSelectedModels] = useState([
-    "foot-ulcers-szvdf/3",
-    "foot-ulcers-szvdf/2", 
-    "foot-ulcers-szvdf/1"
+    "foot-ulcers-szvdf/3 YOLOv26",
+    "foot-ulcers-szvdf/2 YOLOv12", 
+    "foot-ulcers-szvdf/1 YOLOv11"
   ]);
 
   const toggleModel = (modelId) => {
@@ -854,9 +854,9 @@ const NewScanPage = ({ navigate, setAnalysisResult, setScanImage, userData }) =>
   };
 
   const availableModels = [
-    { id: "foot-ulcers-szvdf/1", name: "Model v1 (mAP: 92.7%)", weight: 0.927 },
-    { id: "foot-ulcers-szvdf/2", name: "Model v2 (mAP: 91.4%)", weight: 0.914 },
-    { id: "foot-ulcers-szvdf/3", name: "Model v3 (mAP: 90.6%)", weight: 0.906 }
+    { id: "foot-ulcers-szvdf/1", name: "Model v1 YOLOv26 (mAP: 92.7%)", weight: 0.927 },
+    { id: "foot-ulcers-szvdf/2", name: "Model v2 YOLOv12 (mAP: 91.4%)", weight: 0.914 },
+    { id: "foot-ulcers-szvdf/3", name: "Model v3 YOLOv11 (mAP: 90.6%)", weight: 0.906 }
   ];
 
   return (
@@ -1804,15 +1804,15 @@ const PatientCumulative = ({ allScans }) => {
 
 const TestModel = () => {
   const [enabledModels, setEnabledModels] = useState({
-    "foot-ulcers-szvdf/3": true,
-    "foot-ulcers-szvdf/2": true,
-    "foot-ulcers-szvdf/1": true
+    "foot-ulcers-szvdf/3 - YOLOv26 ": true,
+    "foot-ulcers-szvdf/2 - YOLOv12 ": true,
+    "foot-ulcers-szvdf/1 - YOLOv11 ": true
   });
 
   const modelMetrics = [
-    { id: "foot-ulcers-szvdf/1", mAP: "92.7%", precision: "91.2%", recall: "86.1%" },
-    { id: "foot-ulcers-szvdf/2", mAP: "91.4%", precision: "90.9%", recall: "85.2%" },
-    { id: "foot-ulcers-szvdf/3", mAP: "90.6%", precision: "90.7%", recall: "84.3%" }
+    { id: "foot-ulcers-szvdf/1 YOLOv26", mAP: "92.7%", precision: "91.2%", recall: "86.1%" },
+    { id: "foot-ulcers-szvdf/2 YOLOv12", mAP: "91.4%", precision: "90.9%", recall: "85.2%" },
+    { id: "foot-ulcers-szvdf/3 YOLOv11", mAP: "90.6%", precision: "90.7%", recall: "84.3%" }
   ];
 
   return (
@@ -1863,7 +1863,7 @@ const TestModel = () => {
 
       <div className="bg-white p-6 rounded-2xl border shadow-lg hover:shadow-xl transition-shadow duration-300">
         <h3 className="font-semibold text-lg text-slate-900 mb-4">Model Details</h3>
-        <p className="text-slate-600">Model Name: YOLOv11 DFU Detector</p>
+        <p className="text-slate-600">Model Name: YOLOv12 DFU Detector</p>
         <p className="text-slate-600">Version: {MODEL_VERSION}</p>
         <p className="text-slate-600">Precision: 91%</p>
         <p className="text-slate-600">Recall: 88%</p>
